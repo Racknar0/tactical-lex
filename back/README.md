@@ -17,22 +17,29 @@ Configura estas variables antes de iniciar:
 
 - GOOGLE_API_KEY: tu API key de Gemini
 - PORT (opcional): por defecto 3300
+- CHAT_QUERY_TIMEOUT_MS: timeout general del chat (ms)
+- CASUAL_FAST_TIMEOUT_MS: timeout del carril rapido (ms)
+- INTENT_CLASSIFIER_ENABLED: activa/desactiva micro-clasificador de intenciones
+- INTENT_CLASSIFIER_MODEL: perfil o modelo para clasificacion ambigua (ej: ligero)
+- INTENT_CLASSIFIER_TIMEOUT_MS: timeout del micro-clasificador (ms)
 
-## Modelos de Chat
+## Configuracion IA Centralizada
 
-Los modelos se seleccionan desde el frontend y se envian en cada request al backend.
+Los perfiles y modelos se centralizan en [back/configIA.js](configIA.js).
 
-Modelos soportados:
+Perfiles soportados:
 
-- gemini-3.1-pro-preview
-- gemini-3-flash-preview
-- gemini-3.1-flash-lite-preview
+- pesado (Gemini 3.1 Pro)
+- equilibrado (Gemini 3 Flash)
+- ligero (Gemini 3.1 Flash Lite)
+
+El frontend envia el perfil (peso) y el backend resuelve automaticamente el modelo real.
 
 ## Modos de Conversacion
 
-- Estricto: solo responde con evidencia del contexto recuperado; si no hay evidencia suficiente, no responde fuera del documento.
-- Hibrido: permite saludo/conversacion casual sin contexto, pero para preguntas de contenido aplica modo estricto.
-- Libre con Preferencia de Contexto: prioriza el contexto cargado, pero puede responder conocimiento general aclarando cuando sea fuera de contexto.
+- Estricto (Auditor Legal): temperatura baja, solo evidencia del contexto. Si falta evidencia responde con negativa explicita.
+- Hibrido (Asistente Inteligente): usa un router por fases (filtros rapidos, gatillos documentales y micro-clasificador opcional). Charla casual va por carril rapido; consulta tecnica/documental va por carril pesado con contexto.
+- Libre con Preferencia de Contexto (Consultor Experto): prioriza contexto, pero puede completar con conocimiento general y advertencia explicita si fue fuera del documento.
 
 ## Ejecucion
 

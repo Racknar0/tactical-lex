@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { RefreshCw, Upload, Trash2, Plus, Database } from 'lucide-react';
+import { RefreshCw, Upload, Trash2, Plus, Database, ChevronDown } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { api, readFileAsBase64 } from '../api/client';
 import GlassCard from '../components/GlassCard';
@@ -33,6 +33,7 @@ export default function VaultModule() {
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState('Aún no hay cargas.');
   const [loadingAction, setLoadingAction] = useState('');
+  const [isSystemStateOpen, setIsSystemStateOpen] = useState(false);
 
   useEffect(() => {
     if (selectedStore) {
@@ -247,7 +248,24 @@ export default function VaultModule() {
 
       {/* ═══════ State ═══════ */}
       <GlassCard title="Estado del Sistema" className="vault-full">
-        <div className="state-box">{state ? JSON.stringify(state, null, 2) : 'Cargando estado...'}</div>
+        <button
+          type="button"
+          className={`state-toggle ${isSystemStateOpen ? 'open' : ''}`}
+          onClick={() => setIsSystemStateOpen((prev) => !prev)}
+          aria-expanded={isSystemStateOpen}
+          aria-controls="system-state-content"
+        >
+          <span>{isSystemStateOpen ? 'Ocultar detalles' : 'Mostrar detalles'}</span>
+          <ChevronDown size={16} />
+        </button>
+
+        {isSystemStateOpen ? (
+          <div id="system-state-content" className="state-box">
+            {state ? JSON.stringify(state, null, 2) : 'Cargando estado...'}
+          </div>
+        ) : (
+          <div className="state-collapsed-note">Panel contraído por defecto. Expándelo para ver el JSON de estado.</div>
+        )}
       </GlassCard>
     </div>
   );

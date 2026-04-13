@@ -228,6 +228,47 @@
 }
 
 /* ═══════ State Box ═══════ */
+.state-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: var(--font);
+}
+
+.state-toggle:hover {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.state-toggle svg {
+  transition: transform 0.2s var(--ease);
+}
+
+.state-toggle.open svg {
+  transform: rotate(180deg);
+}
+
+.state-collapsed-note {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
 .state-box {
   padding: 10px 14px;
   border-radius: var(--radius-sm);

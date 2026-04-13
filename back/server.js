@@ -6,6 +6,14 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
+import {
+  IA_DEFAULT_WEIGHT,
+  getIAProfileByWeight,
+  getPublicIAProfiles,
+  getSupportedModelIds,
+  getSupportedModelWeights,
+  resolveIAProfile,
+} from "./configIA.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,12 +28,15 @@ function parseTimeoutMs(rawValue, defaultValue) {
 }
 
 const PORT = Number(process.env.PORT ?? 3300);
-const SUPPORTED_CHAT_MODELS = [
-  "gemini-3.1-pro-preview",
-  "gemini-3-flash-preview",
-  "gemini-3.1-flash-lite-preview",
-];
-const DEFAULT_CHAT_MODEL = "gemini-3-flash-preview";
+const IA_MODEL_PROFILES = getPublicIAProfiles();
+const SUPPORTED_CHAT_MODELS = getSupportedModelIds();
+const SUPPORTED_MODEL_WEIGHTS = getSupportedModelWeights();
+const DEFAULT_MODEL_PROFILE =
+  getIAProfileByWeight(IA_DEFAULT_WEIGHT) || IA_MODEL_PROFILES[0];
+const DEFAULT_CHAT_MODEL =
+  DEFAULT_MODEL_PROFILE?.model || IA_MODEL_PROFILES[0]?.model;
+const DEFAULT_CHAT_MODEL_WEIGHT =
+  DEFAULT_MODEL_PROFILE?.weight || IA_DEFAULT_WEIGHT;
 const STATE_PATH = path.join(__dirname, "storage", "app-state.json");
 const CHAT_MEMORY_PATH = path.join(__dirname, "storage", "chat-memory.json");
 const UPLOADS_PATH = path.join(__dirname, "storage", "uploads");
@@ -39,7 +50,21 @@ const CASUAL_FAST_TIMEOUT_MS = parseTimeoutMs(
   process.env.CASUAL_FAST_TIMEOUT_MS,
   120000
 );
-const CASUAL_FAST_MODEL = "gemini-3.1-flash-lite-preview";
+const CASUAL_FAST_MODEL =
+  getIAProfileByWeight("ligero")?.model || DEFAULT_CHAT_MODEL;
+const INTENT_CLASSIFIER_ENABLED =
+  String(process.env.INTENT_CLASSIFIER_ENABLED ?? "true").toLowerCase() !==
+  "false";
+const INTENT_CLASSIFIER_MODEL =
+  resolveIAProfile(process.env.INTENT_CLASSIFIER_MODEL?.trim())?.model ||
+  CASUAL_FAST_MODEL;
+const INTENT_CLASSIFIER_TIMEOUT_MS = parseTimeoutMs(
+  process.env.INTENT_CLASSIFIER_TIMEOUT_MS,
+  5000
+);
+const STRICT_TEMPERATURE = 0.1;
+const HYBRID_TEMPERATURE = 0.25;
+const FREE_TEMPERATURE = 0.5;
 const GOOGLE_API_LOGS_ENABLED =
   String(process.env.GOOGLE_API_LOGS ?? "true").toLowerCase() !== "false";
 const ASSISTANT_IDENTITY_MESSAGE =
@@ -49,7 +74,7 @@ const BASE_IDENTITY_INSTRUCTION =
 const UPLOAD_MAX_TOKENS_PER_CHUNK = 500;
 const UPLOAD_MAX_OVERLAP_TOKENS = 200;
 const NO_EVIDENCE_MESSAGE =
-  `${ASSISTANT_IDENTITY_MESSAGE} No tengo suficiente evidencia en el contexto seleccionado para responder esa pregunta.`;
+  "No hay evidencia suficiente en el documento o contexto seleccionado para responder esa pregunta.";
 const SUPPORTED_CHAT_MODES = [
   {
     id: "estricto",
@@ -72,17 +97,21 @@ const SUPPORTED_CHAT_MODES = [
 ];
 const DEFAULT_CHAT_MODE = "hibrido";
 const STRICT_RAG_INSTRUCTION =
-  `${BASE_IDENTITY_INSTRUCTION} Responde SOLO con evidencia recuperada por File Search. Si la evidencia no es suficiente, responde exactamente: ${NO_EVIDENCE_MESSAGE}`;
+  `${BASE_IDENTITY_INSTRUCTION} Modo estricto: responde SOLO con evidencia recuperada por File Search. Tono directo, sin saludo ni charla casual. Si la evidencia no es suficiente, responde exactamente: ${NO_EVIDENCE_MESSAGE}`;
 const HYBRID_SMALL_TALK_INSTRUCTION =
-  `${BASE_IDENTITY_INSTRUCTION} Eres un asistente conversacional en espanol. Si el usuario saluda o hace charla casual, responde de forma breve y natural sin forzar busqueda documental.`;
+  `${BASE_IDENTITY_INSTRUCTION} Modo hibrido: si la consulta es casual, responde breve y natural. Si es tecnica/documental, responde de forma rigurosa y sustentada en contexto cuando se active File Search.`;
 const FREE_CONTEXT_PREFERRED_INSTRUCTION =
-  `${BASE_IDENTITY_INSTRUCTION} Prioriza responder con evidencia recuperada por File Search. Si no hay evidencia suficiente, puedes responder con conocimiento general, pero aclara explicitamente que la parte no viene del contexto cargado.`;
+  `${BASE_IDENTITY_INSTRUCTION} Modo libre: prioriza responder con evidencia recuperada por File Search. Si no hay evidencia suficiente, puedes responder con conocimiento general, pero aclara explicitamente que esa parte no viene del contexto cargado.`;
 const GENERAL_FAST_INSTRUCTION =
   `${BASE_IDENTITY_INSTRUCTION} Responde en espanol de forma breve y directa. Si la pregunta requiere documento y no hay contexto activo, indicalo claramente.`;
 const LEGAL_PETITION_SYSTEM_INSTRUCTION =
   "Eres un abogado administrativo en Colombia. Tu tarea es tomar los hechos informales narrados por el usuario y redactarlos en un lenguaje juridico, formal y respetuoso. Debes consultar el documento adjunto en el File Search (Ley 1437) UNICAMENTE para extraer los articulos que fundamentan el Derecho de Peticion e incluirlos en la respuesta. No inventes leyes.";
 const LEGAL_TUTELA_SYSTEM_INSTRUCTION_TEMPLATE =
   "Eres un experto Abogado Constitucionalista en Colombia. Tu tarea es redactar el cuerpo de una Acción de Tutela. Toma los hechos y pretensiones informales del usuario y redáctalos en un lenguaje jurídico, formal, cronológico y respetuoso dirigido a un Juez de la República. Debes consultar el documento adjunto (Decreto 2591) para extraer los fundamentos legales de la procedencia de la tutela. El derecho vulnerado principal es: [insertar derecho_vulnerado].";
+const POLICE_REPORT_SYSTEM_INSTRUCTION =
+  "Eres un oficial de alto rango de la Policía Nacional de Colombia, experto en redacción documental institucional y militar. Tu tarea es tomar el relato informal de un subalterno y transformarlo en un informe de policía impecable, objetivo, cronológico, en tercera persona o primera persona formal, usando terminología policial adecuada (ej: 'sujeto', 'indiciado', 'procedimiento policial', 'cuadrante'). El tono debe ser altamente respetuoso, típicamente dirigido a un superior.";
+const FPJ5_CAPTURE_SYSTEM_INSTRUCTION =
+  "Eres un experto Investigador de Policía Judicial (SIJIN) en Colombia. Tu tarea es tomar el relato informal de un policía de vigilancia y transformarlo en el relato de los hechos para un Formato FPJ-5 (Captura en Flagrancia). Redacta en tercera persona, usando tiempo pasado, de forma estrictamente cronológica y descriptiva. Usa lenguaje técnico penal (ej: 'indiciado', 'elemento material probatorio', 'voces de auxilio', 'registro a persona').";
 
 const initialState = {
   activeStoreName: null,
@@ -160,25 +189,64 @@ function normalizeMode(input) {
   return exists ? cleaned : DEFAULT_CHAT_MODE;
 }
 
-function isSmallTalkMessage(input) {
-  if (typeof input !== "string") {
-    return false;
+function resolveRequestedModelSelection(inputValue) {
+  const raw = typeof inputValue === "string" ? inputValue.trim() : "";
+  if (!raw) {
+    return {
+      ok: true,
+      requested: "",
+      profile: DEFAULT_MODEL_PROFILE,
+    };
   }
 
-  const text = input.trim().toLowerCase();
+  const profile = resolveIAProfile(raw);
+  if (!profile) {
+    return {
+      ok: false,
+      requested: raw,
+      profile: null,
+    };
+  }
+
+  return {
+    ok: true,
+    requested: raw,
+    profile,
+  };
+}
+
+function normalizeForIntent(input) {
+  return String(input ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function asksForAssistantIdentity(question) {
+  const text = normalizeForIntent(question);
+  if (!text) return false;
+
+  return /\b(quien eres|que eres|como te llamas|identificate|tu nombre)\b/i.test(
+    text
+  );
+}
+
+function isSmallTalkMessage(input) {
+  const text = normalizeForIntent(input);
   if (!text) {
     return false;
   }
 
   const smallTalkPattern =
-    /^(hola+|buenas|buenos dias|buenas tardes|buenas noches|que tal|como estas|gracias|ok|dale|listo|perfecto|genial|hi|hello|thanks|thank you)[!.?\s]*$/i;
+    /^(hola+|buenas|buenos dias|buenas tardes|buenas noches|que tal|como estas|gracias|ok|dale|listo|perfecto|genial|hi|hello|thanks|thank you|buen dia)[!.?\s]*$/i;
 
   if (smallTalkPattern.test(text)) {
     return true;
   }
 
   const hasDocumentIntent =
-    /(documento|archivo|pdf|contexto|capitulo|clausula|articulo|seccion|resumen|segun|busca|donde dice|que dice)/i.test(
+    /(documento|archivo|pdf|contexto|capitulo|clausula|articulo|seccion|resumen|segun|busca|donde dice|que dice|ley|decreto|norma|fpj|tutela)/i.test(
       text
     );
 
@@ -189,49 +257,193 @@ function isSmallTalkMessage(input) {
   return text.length <= 24 && !text.includes("?");
 }
 
-function classifyQuestionNeedsContext(question) {
-  const text = String(question ?? "").trim().toLowerCase();
-  const hasQuestionMark = /[?¿]/.test(text);
+function phaseOneFastFilters(question) {
+  const raw = String(question ?? "").trim();
+  const text = normalizeForIntent(raw);
   const tokenCount = text.split(/\s+/).filter(Boolean).length;
-  const hasDocumentSignal =
-    /(documento|archivo|pdf|contexto|capitulo|clausula|articulo|seccion|resumen|segun|busca|donde dice|que dice|en el texto|en el contrato|fuente|evidencia)/i.test(
-      text
-    );
+  const hasQuestionMark = /[?¿]/.test(raw);
   const conversational = isSmallTalkMessage(text);
 
-  if (hasDocumentSignal) {
-    return {
-      needsContext: true,
-      reason: "senales_documentales",
-      conversational,
-      tokenCount,
-    };
-  }
-
-  if (conversational) {
+  if (conversational && tokenCount <= 6 && !hasQuestionMark) {
     return {
       needsContext: false,
-      reason: "charla_casual",
-      conversational,
+      conversational: true,
+      reason: "fase_1_cortesia",
+      confidence: "alta",
+      phase: "fase_1",
+      uncertain: false,
       tokenCount,
+      hasQuestionMark,
     };
   }
 
-  if (hasQuestionMark || tokenCount >= 10) {
+  if (tokenCount <= 2 && !hasQuestionMark) {
     return {
-      needsContext: true,
-      reason: "pregunta_informativa",
-      conversational,
+      needsContext: false,
+      conversational: true,
+      reason: "fase_1_mensaje_muy_corto",
+      confidence: "alta",
+      phase: "fase_1",
+      uncertain: false,
       tokenCount,
+      hasQuestionMark,
     };
   }
 
   return {
     needsContext: false,
-    reason: "consulta_general_corta",
     conversational,
+    reason: "fase_1_sin_decision",
+    confidence: "baja",
+    phase: "fase_1",
+    uncertain: true,
     tokenCount,
+    hasQuestionMark,
   };
+}
+
+function phaseTwoDocumentTriggers(question, baseIntent) {
+  const text = normalizeForIntent(question);
+  const hasDocumentSignal =
+    /(documento|archivo|pdf|contexto|capitulo|clausula|articulo|seccion|resumen|segun|busca|donde dice|que dice|en el texto|en el contrato|fuente|evidencia|pagina|manual|norma|ley|decreto|jurisprudencia|sentencia|codigo|fpj|captura|tutela|derecho de peticion)/i.test(
+      text
+    );
+  const hasActionSignal =
+    /(resum|explic|analiz|cita|extrae|redact|compar|interpret|fundament|pasos|procedimiento|llenar|diligenciar|seccion|apartado|art\.?\s*\d+)/i.test(
+      text
+    );
+
+  if (hasDocumentSignal || hasActionSignal) {
+    return {
+      ...baseIntent,
+      needsContext: true,
+      conversational: false,
+      reason: hasDocumentSignal
+        ? "fase_2_gatillo_documental"
+        : "fase_2_gatillo_accion_tecnica",
+      confidence: "alta",
+      phase: "fase_2",
+      uncertain: false,
+      hasDocumentSignal,
+      hasActionSignal,
+    };
+  }
+
+  if (baseIntent.hasQuestionMark && baseIntent.tokenCount >= 10) {
+    return {
+      ...baseIntent,
+      needsContext: true,
+      conversational: false,
+      reason: "fase_2_pregunta_informativa",
+      confidence: "media",
+      phase: "fase_2",
+      uncertain: false,
+      hasDocumentSignal,
+      hasActionSignal,
+    };
+  }
+
+  return {
+    ...baseIntent,
+    reason: "fase_2_ambiguo",
+    confidence: "baja",
+    phase: "fase_2",
+    uncertain: true,
+    hasDocumentSignal,
+    hasActionSignal,
+  };
+}
+
+async function classifyIntentWithMicroModel(ai, question) {
+  const prompt = `Analiza la intencion del siguiente mensaje del usuario y responde SOLO JSON valido.\n\nMensaje: "${String(
+    question ?? ""
+  ).replace(/"/g, '\\"')}"\n\nReglas:\n- needsContext=true si para responder bien hay que consultar documentos legales o evidencia del contexto local.\n- conversational=true si es saludo/cortesia/charla casual.\n- confidence debe ser: alta, media o baja.\n\nFormato JSON exacto:\n{\n  "needsContext": true|false,\n  "conversational": true|false,\n  "confidence": "alta|media|baja",\n  "reason": "texto_corto"\n}`;
+
+  const response = await withTimeout(
+    ai.models.generateContent({
+      model: INTENT_CLASSIFIER_MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: {
+        temperature: 0,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            needsContext: { type: "BOOLEAN" },
+            conversational: { type: "BOOLEAN" },
+            confidence: { type: "STRING" },
+            reason: { type: "STRING" },
+          },
+          required: ["needsContext", "conversational"],
+        },
+      },
+    }),
+    INTENT_CLASSIFIER_TIMEOUT_MS,
+    `El clasificador de intencion excedio ${INTENT_CLASSIFIER_TIMEOUT_MS}ms.`
+  );
+
+  const parsed = extractJsonObjectFromText(response.text);
+  const confidenceRaw = String(parsed?.confidence ?? "media").toLowerCase();
+  const confidence = ["alta", "media", "baja"].includes(confidenceRaw)
+    ? confidenceRaw
+    : "media";
+
+  return {
+    needsContext: Boolean(parsed?.needsContext),
+    conversational: Boolean(parsed?.conversational),
+    confidence,
+    reason: String(parsed?.reason ?? "fase_3_micro_clasificador"),
+    phase: "fase_3",
+    uncertain: false,
+  };
+}
+
+async function classifyQuestionNeedsContext(ai, question, mode) {
+  if (mode === "estricto") {
+    return {
+      needsContext: true,
+      conversational: false,
+      reason: "modo_estricto",
+      confidence: "alta",
+      phase: "modo",
+      uncertain: false,
+      classifierUsed: false,
+      lane: "pesado",
+    };
+  }
+
+  const phaseOne = phaseOneFastFilters(question);
+  const phaseTwo = phaseTwoDocumentTriggers(question, phaseOne);
+
+  if (!phaseTwo.uncertain || !INTENT_CLASSIFIER_ENABLED) {
+    return {
+      ...phaseTwo,
+      classifierUsed: false,
+      lane: phaseTwo.needsContext ? "pesado" : "rapido",
+    };
+  }
+
+  try {
+    const micro = await classifyIntentWithMicroModel(ai, question);
+    return {
+      ...phaseTwo,
+      ...micro,
+      classifierUsed: true,
+      lane: micro.needsContext ? "pesado" : "rapido",
+    };
+  } catch (error) {
+    logGoogleApiCall("intent.classifier.error", {
+      model: INTENT_CLASSIFIER_MODEL,
+      message: clipText(error?.message ?? "", 180),
+    });
+
+    return {
+      ...phaseTwo,
+      classifierUsed: false,
+      lane: phaseTwo.needsContext ? "pesado" : "rapido",
+      reason: "fase_3_fallback_reglas",
+    };
+  }
 }
 
 function pruneChatMemory(chatMemory) {
@@ -331,12 +543,16 @@ function clipText(text, maxLength = 180) {
   return `${text.slice(0, maxLength)}...`;
 }
 
-function enforceAssistantIdentity(answer) {
+function enforceAssistantIdentity(answer, question) {
   if (typeof answer !== "string" || !answer.trim()) {
     return ASSISTANT_IDENTITY_MESSAGE;
   }
 
   if (/tactical\s*lex\s*ia/i.test(answer)) {
+    return answer;
+  }
+
+  if (!asksForAssistantIdentity(question)) {
     return answer;
   }
 
@@ -442,13 +658,16 @@ function shouldRetryModelCall(error) {
 }
 
 function buildModelAttemptList(preferredModel, contextRequired) {
+  const preferredProfile =
+    resolveIAProfile(preferredModel) || DEFAULT_MODEL_PROFILE;
+  const balancedModel =
+    getIAProfileByWeight("equilibrado")?.model || DEFAULT_CHAT_MODEL;
+  const lightweightModel =
+    getIAProfileByWeight("ligero")?.model || DEFAULT_CHAT_MODEL;
+
   const chain = contextRequired
-    ? [
-        preferredModel,
-        "gemini-3-flash-preview",
-        "gemini-3.1-flash-lite-preview",
-      ]
-    : [preferredModel, "gemini-3.1-flash-lite-preview"];
+    ? [preferredProfile.model, balancedModel, lightweightModel]
+    : [preferredProfile.model, lightweightModel];
 
   return [...new Set(chain)].filter((model) =>
     SUPPORTED_CHAT_MODELS.includes(model)
@@ -648,7 +867,9 @@ app.get("/api/health", (_req, res) => {
     ok: true,
     app: "Tactical Lex",
     model: DEFAULT_CHAT_MODEL,
-    supportedModels: SUPPORTED_CHAT_MODELS,
+    modelWeight: DEFAULT_CHAT_MODEL_WEIGHT,
+    supportedModels: SUPPORTED_MODEL_WEIGHTS,
+    supportedModelIds: SUPPORTED_CHAT_MODELS,
   });
 });
 
@@ -661,8 +882,12 @@ app.get("/api/state", async (_req, res, next) => {
       ok: true,
       state,
       model: DEFAULT_CHAT_MODEL,
-      supportedModels: SUPPORTED_CHAT_MODELS,
-      defaultChatModel: DEFAULT_CHAT_MODEL,
+      modelWeight: DEFAULT_CHAT_MODEL_WEIGHT,
+      supportedModels: SUPPORTED_MODEL_WEIGHTS,
+      defaultChatModel: DEFAULT_CHAT_MODEL_WEIGHT,
+      supportedModelIds: SUPPORTED_CHAT_MODELS,
+      defaultChatModelId: DEFAULT_CHAT_MODEL,
+      supportedModelProfiles: IA_MODEL_PROFILES,
       supportedChatModes: SUPPORTED_CHAT_MODES,
       defaultChatMode: DEFAULT_CHAT_MODE,
       chat: {
@@ -1079,17 +1304,17 @@ app.post("/api/generar-peticion", async (req, res) => {
       });
     }
 
-    const selectedModel =
-      typeof model === "string" && model.trim()
-        ? model.trim()
-        : DEFAULT_CHAT_MODEL;
-
-    if (!SUPPORTED_CHAT_MODELS.includes(selectedModel)) {
+    const modelSelection = resolveRequestedModelSelection(model);
+    if (!modelSelection.ok) {
       return res.status(400).json({
         ok: false,
-        message: `Modelo no soportado: ${selectedModel}.`,
+        message: `Perfil/modelo no soportado: ${modelSelection.requested}. Permitidos: ${SUPPORTED_MODEL_WEIGHTS.join(
+          ", "
+        )}.`,
       });
     }
+    const selectedModelProfile = modelSelection.profile;
+    const selectedModel = selectedModelProfile.model;
 
     const state = await readState();
     const storeId = String(state?.activeStoreName ?? "").trim();
@@ -1129,6 +1354,7 @@ app.post("/api/generar-peticion", async (req, res) => {
 
     logGoogleApiCall("models.generateContent.legalPetition", {
       model: selectedModel,
+      modelWeight: selectedModelProfile.weight,
       storeId,
       entidad: clipText(String(entidad), 80),
       objeto: clipText(String(objeto), 120),
@@ -1171,6 +1397,8 @@ app.post("/api/generar-peticion", async (req, res) => {
     return res.json({
       ok: true,
       model: selectedModel,
+      modelWeight: selectedModelProfile.weight,
+      modelHumanName: selectedModelProfile.human_name,
       data: result,
     });
   } catch (error) {
@@ -1215,17 +1443,17 @@ app.post("/api/generar-tutela", async (req, res) => {
       });
     }
 
-    const selectedModel =
-      typeof model === "string" && model.trim()
-        ? model.trim()
-        : DEFAULT_CHAT_MODEL;
-
-    if (!SUPPORTED_CHAT_MODELS.includes(selectedModel)) {
+    const modelSelection = resolveRequestedModelSelection(model);
+    if (!modelSelection.ok) {
       return res.status(400).json({
         ok: false,
-        message: `Modelo no soportado: ${selectedModel}.`,
+        message: `Perfil/modelo no soportado: ${modelSelection.requested}. Permitidos: ${SUPPORTED_MODEL_WEIGHTS.join(
+          ", "
+        )}.`,
       });
     }
+    const selectedModelProfile = modelSelection.profile;
+    const selectedModel = selectedModelProfile.model;
 
     const state = await readState();
     const storeId = String(state?.activeStoreName ?? "").trim();
@@ -1274,6 +1502,7 @@ app.post("/api/generar-tutela", async (req, res) => {
 
     logGoogleApiCall("models.generateContent.legalTutela", {
       model: selectedModel,
+      modelWeight: selectedModelProfile.weight,
       storeId,
       entidadAccionada: clipText(String(entidad_accionada), 80),
       derechoVulnerado: clipText(String(derecho_vulnerado), 80),
@@ -1334,6 +1563,8 @@ app.post("/api/generar-tutela", async (req, res) => {
     return res.json({
       ok: true,
       model: selectedModel,
+      modelWeight: selectedModelProfile.weight,
+      modelHumanName: selectedModelProfile.human_name,
       data: result,
     });
   } catch (error) {
@@ -1347,14 +1578,248 @@ app.post("/api/generar-tutela", async (req, res) => {
   }
 });
 
+app.post("/api/generar-informe-policia", async (req, res) => {
+  try {
+    const {
+      grado,
+      nombres,
+      unidad,
+      fecha_hora,
+      lugar,
+      relato,
+      model,
+    } = req.body ?? {};
+
+    if (!grado || !nombres || !unidad || !fecha_hora || !lugar || !relato) {
+      return res.status(400).json({
+        ok: false,
+        message:
+          "Faltan campos obligatorios: grado, nombres, unidad, fecha_hora, lugar y relato.",
+      });
+    }
+
+    const modelSelection = resolveRequestedModelSelection(model);
+    if (!modelSelection.ok) {
+      return res.status(400).json({
+        ok: false,
+        message: `Perfil/modelo no soportado: ${modelSelection.requested}. Permitidos: ${SUPPORTED_MODEL_WEIGHTS.join(
+          ", "
+        )}.`,
+      });
+    }
+    const selectedModelProfile = modelSelection.profile;
+    const selectedModel = selectedModelProfile.model;
+
+    const ai = getAIClient();
+
+    const prompt = [
+      "Redacta un informe de novedad policial con salida JSON estricto.",
+      "Debes devolver exactamente dos llaves: asunto y cuerpo_informe.",
+      "No agregues llaves extra, no devuelvas markdown.",
+      "",
+      "Datos del uniformado:",
+      `- Grado: ${String(grado).trim()}`,
+      `- Nombres y apellidos: ${String(nombres).trim()}`,
+      `- Unidad/cuadrante: ${String(unidad).trim()}`,
+      "",
+      "Datos de la novedad:",
+      `- Fecha y hora: ${String(fecha_hora).trim()}`,
+      `- Lugar: ${String(lugar).trim()}`,
+      `- Relato informal: ${String(relato).trim()}`,
+      "",
+      "Formato obligatorio:",
+      '{"asunto":"...","cuerpo_informe":"..."}',
+    ].join("\n");
+
+    logGoogleApiCall("models.generateContent.policeReport", {
+      model: selectedModel,
+      modelWeight: selectedModelProfile.weight,
+      unidad: clipText(String(unidad), 80),
+      lugar: clipText(String(lugar), 100),
+    });
+
+    const response = await withTimeout(
+      ai.models.generateContent({
+        model: selectedModel,
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: {
+          temperature: 0.2,
+          systemInstruction: POLICE_REPORT_SYSTEM_INSTRUCTION,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              asunto: { type: "STRING" },
+              cuerpo_informe: { type: "STRING" },
+            },
+            required: ["asunto", "cuerpo_informe"],
+          },
+        },
+      }),
+      CHAT_QUERY_TIMEOUT_MS,
+      `Gemini no respondio dentro de ${CHAT_QUERY_TIMEOUT_MS}ms para generar el informe policial.`
+    );
+
+    const parsed = extractJsonObjectFromText(response.text);
+    const result = {
+      asunto: String(parsed?.asunto ?? "").trim(),
+      cuerpo_informe: String(parsed?.cuerpo_informe ?? "").trim(),
+    };
+
+    if (!result.asunto || !result.cuerpo_informe) {
+      throw new Error(
+        "Gemini no devolvio el JSON esperado con asunto y cuerpo_informe."
+      );
+    }
+
+    return res.json({
+      ok: true,
+      model: selectedModel,
+      modelWeight: selectedModelProfile.weight,
+      modelHumanName: selectedModelProfile.human_name,
+      data: result,
+    });
+  } catch (error) {
+    console.error("[generar-informe-policia]", error);
+    return res.status(500).json({
+      ok: false,
+      message:
+        "No se pudo generar el Informe de Novedad Policial. Reintenta en unos segundos.",
+      detail: error?.message || "Fallo desconocido.",
+    });
+  }
+});
+
+app.post("/api/generar-captura", async (req, res) => {
+  try {
+    const {
+      capturador,
+      unidad,
+      indiciado,
+      presunto_delito,
+      lugar_fecha_hora,
+      relato,
+      model,
+    } = req.body ?? {};
+
+    if (
+      !capturador ||
+      !unidad ||
+      !indiciado ||
+      !presunto_delito ||
+      !lugar_fecha_hora ||
+      !relato
+    ) {
+      return res.status(400).json({
+        ok: false,
+        message:
+          "Faltan campos obligatorios: capturador, unidad, indiciado, presunto_delito, lugar_fecha_hora y relato.",
+      });
+    }
+
+    const modelSelection = resolveRequestedModelSelection(model);
+    if (!modelSelection.ok) {
+      return res.status(400).json({
+        ok: false,
+        message: `Perfil/modelo no soportado: ${modelSelection.requested}. Permitidos: ${SUPPORTED_MODEL_WEIGHTS.join(
+          ", "
+        )}.`,
+      });
+    }
+    const selectedModelProfile = modelSelection.profile;
+    const selectedModel = selectedModelProfile.model;
+
+    const ai = getAIClient();
+
+    const prompt = [
+      "Redacta un texto técnico para Formato FPJ-5 (Captura en Flagrancia) con salida JSON estricto.",
+      "Debes devolver exactamente una llave: relato_fpj5.",
+      "No agregues llaves extra, no devuelvas markdown.",
+      "",
+      "Datos del procedimiento:",
+      `- Capturador (grado y nombres): ${String(capturador).trim()}`,
+      `- Unidad/cuadrante: ${String(unidad).trim()}`,
+      `- Indiciado: ${String(indiciado).trim()}`,
+      `- Presunto delito: ${String(presunto_delito).trim()}`,
+      `- Lugar, fecha y hora: ${String(lugar_fecha_hora).trim()}`,
+      `- Relato informal de captura: ${String(relato).trim()}`,
+      "",
+      "Formato obligatorio:",
+      '{"relato_fpj5":"..."}',
+    ].join("\n");
+
+    logGoogleApiCall("models.generateContent.captureFpj5", {
+      model: selectedModel,
+      modelWeight: selectedModelProfile.weight,
+      unidad: clipText(String(unidad), 80),
+      presuntoDelito: clipText(String(presunto_delito), 80),
+    });
+
+    const response = await withTimeout(
+      ai.models.generateContent({
+        model: selectedModel,
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: {
+          temperature: 0.2,
+          systemInstruction: FPJ5_CAPTURE_SYSTEM_INSTRUCTION,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              relato_fpj5: { type: "STRING" },
+            },
+            required: ["relato_fpj5"],
+          },
+        },
+      }),
+      CHAT_QUERY_TIMEOUT_MS,
+      `Gemini no respondio dentro de ${CHAT_QUERY_TIMEOUT_MS}ms para generar la captura.`
+    );
+
+    const parsed = extractJsonObjectFromText(response.text);
+    const result = {
+      relato_fpj5: String(parsed?.relato_fpj5 ?? "").trim(),
+    };
+
+    if (!result.relato_fpj5) {
+      throw new Error("Gemini no devolvio el JSON esperado con relato_fpj5.");
+    }
+
+    return res.json({
+      ok: true,
+      model: selectedModel,
+      modelWeight: selectedModelProfile.weight,
+      modelHumanName: selectedModelProfile.human_name,
+      data: result,
+    });
+  } catch (error) {
+    console.error("[generar-captura]", error);
+    return res.status(500).json({
+      ok: false,
+      message:
+        "No se pudo generar el relato técnico de captura FPJ-5. Reintenta en unos segundos.",
+      detail: error?.message || "Fallo desconocido.",
+    });
+  }
+});
+
 app.post("/api/rag/query", async (req, res, next) => {
   try {
     const ai = getAIClient();
     const state = await readState();
     const requestedSessionId = normalizeSessionId(req.body?.sessionId);
     const sessionId = requestedSessionId ?? randomUUID();
-    const requestedModel = req.body?.model?.trim();
-    const modelName = requestedModel || DEFAULT_CHAT_MODEL;
+    const modelSelection = resolveRequestedModelSelection(req.body?.model);
+    if (!modelSelection.ok) {
+      return res.status(400).json({
+        ok: false,
+        message: `Perfil/modelo no soportado: ${modelSelection.requested}. Permitidos: ${SUPPORTED_MODEL_WEIGHTS.join(
+          ", "
+        )}.`,
+      });
+    }
+    const selectedModelProfile = modelSelection.profile;
+    const modelName = selectedModelProfile.model;
     const mode = normalizeMode(req.body?.mode);
 
     const question = req.body?.question?.trim();
@@ -1365,21 +1830,12 @@ app.post("/api/rag/query", async (req, res, next) => {
       });
     }
 
-    if (!SUPPORTED_CHAT_MODELS.includes(modelName)) {
-      return res.status(400).json({
-        ok: false,
-        message: `Modelo no soportado: ${modelName}. Permitidos: ${SUPPORTED_CHAT_MODELS.join(
-          ", "
-        )}`,
-      });
-    }
-
     const chatMemory = await readChatMemory();
     const previousTurns = getSessionTurns(chatMemory, sessionId).slice(
       -MAX_TURNS_PER_SESSION
     );
     const contents = buildConversationContents(previousTurns, question);
-    const intent = classifyQuestionNeedsContext(question);
+    const intent = await classifyQuestionNeedsContext(ai, question, mode);
     const contextRequired =
       mode === "estricto" || (mode === "hibrido" && intent.needsContext);
     const useFileSearch =
@@ -1388,7 +1844,10 @@ app.post("/api/rag/query", async (req, res, next) => {
 
     // Fast-path: casual messages in hybrid/libre skip heavy models
     const isCasualFastPath =
-      mode !== "estricto" && !intent.needsContext && intent.conversational;
+      mode !== "estricto" &&
+      intent.lane === "rapido" &&
+      !intent.needsContext &&
+      intent.conversational;
     const effectiveModel = isCasualFastPath ? CASUAL_FAST_MODEL : modelName;
     const effectiveTimeout = isCasualFastPath
       ? CASUAL_FAST_TIMEOUT_MS
@@ -1403,6 +1862,7 @@ app.post("/api/rag/query", async (req, res, next) => {
 
     logGoogleApiCall("models.generateContent", {
       model: effectiveModel,
+      selectedModelWeight: selectedModelProfile.weight,
       mode,
       sessionId,
       activeStoreName: state.activeStoreName,
@@ -1422,7 +1882,7 @@ app.post("/api/rag/query", async (req, res, next) => {
     let config;
     if (contextRequired) {
       config = {
-        temperature: 0.2,
+        temperature: STRICT_TEMPERATURE,
         systemInstruction: STRICT_RAG_INSTRUCTION,
         tools: useFileSearch
           ? [
@@ -1438,18 +1898,18 @@ app.post("/api/rag/query", async (req, res, next) => {
     } else if (isCasualFastPath) {
       // Fast casual: no file search, conversational tone
       config = {
-        temperature: 0.5,
+        temperature: HYBRID_TEMPERATURE,
         systemInstruction: HYBRID_SMALL_TALK_INSTRUCTION,
       };
     } else if (mode === "hibrido") {
       config = {
-        temperature: 0.35,
+        temperature: HYBRID_TEMPERATURE,
         systemInstruction: HYBRID_SMALL_TALK_INSTRUCTION,
       };
     } else {
       config = state.activeStoreName
         ? {
-            temperature: 0.35,
+            temperature: FREE_TEMPERATURE,
             systemInstruction: FREE_CONTEXT_PREFERRED_INSTRUCTION,
             tools: useFileSearch
               ? [
@@ -1463,7 +1923,7 @@ app.post("/api/rag/query", async (req, res, next) => {
               : undefined,
           }
         : {
-            temperature: 0.35,
+              temperature: FREE_TEMPERATURE,
             systemInstruction: GENERAL_FAST_INSTRUCTION,
           };
     }
@@ -1487,10 +1947,11 @@ app.post("/api/rag/query", async (req, res, next) => {
     if (contextRequired) {
       answer = grounded ? answer : NO_EVIDENCE_MESSAGE;
     } else if (mode === "libre" && intent.needsContext && !grounded) {
-      answer = `${answer}\n\nNota: no encontre evidencia suficiente en el contexto cargado; esta respuesta puede estar fuera del documento.`;
+      answer = `${answer}\n\nAdvertencia: esta parte no proviene del documento cargado; se respondio con conocimiento general.`;
     }
 
-    answer = enforceAssistantIdentity(answer);
+    answer = enforceAssistantIdentity(answer, question);
+    const usedModelProfile = resolveIAProfile(modelResult.usedModel);
 
     const updatedTurns = [
       ...previousTurns,
@@ -1498,6 +1959,12 @@ app.post("/api/rag/query", async (req, res, next) => {
         user: question,
         assistant: answer,
         grounded,
+        model: modelResult.usedModel,
+        selectedModelWeight: selectedModelProfile.weight,
+        usedModelWeight: usedModelProfile?.weight ?? null,
+        mode,
+        useFileSearch,
+        contextRequired,
         timestamp: new Date().toISOString(),
       },
     ].slice(-MAX_TURNS_PER_SESSION);
@@ -1527,10 +1994,16 @@ app.post("/api/rag/query", async (req, res, next) => {
       sessionId,
       memoryTurns: updatedTurns.length,
       model: modelResult.usedModel,
+      modelWeight: selectedModelProfile.weight,
+      modelHumanName: selectedModelProfile.human_name,
+      selectedModelWeight: selectedModelProfile.weight,
+      usedModelWeight: usedModelProfile?.weight ?? null,
+      usedModelHumanName: usedModelProfile?.human_name ?? modelResult.usedModel,
       fallbackModelUsed: modelResult.fallbackUsed,
       mode,
       modeInfo: SUPPORTED_CHAT_MODES.find((item) => item.id === mode) ?? null,
       route: {
+        lane: intent.lane,
         contextRequired,
         useFileSearch,
         intent,

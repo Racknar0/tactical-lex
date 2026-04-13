@@ -17,6 +17,7 @@ export function AppProvider({ children }) {
   const [chatSessions, setChatSessions] = useState([]);
   const [selectedModel, setSelectedModel] = useState(localStorage.getItem(MODEL_KEY) || '');
   const [selectedMode, setSelectedMode] = useState(localStorage.getItem(MODE_KEY) || '');
+  const [modelProfiles, setModelProfiles] = useState([]);
   const [supportedModels, setSupportedModels] = useState([]);
   const [supportedModes, setSupportedModes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -25,12 +26,16 @@ export function AppProvider({ children }) {
   const refreshState = useCallback(async () => {
     try {
       const data = await api('/state', { method: 'GET' });
+      const profiles = data.supportedModelProfiles || [];
+      const modelWeights = data.supportedModels || profiles.map((profile) => profile.weight) || [];
+
       setState(data);
-      setSupportedModels(data.supportedModels || []);
+      setModelProfiles(profiles);
+      setSupportedModels(modelWeights);
       setSupportedModes(data.supportedChatModes || []);
 
-      if (!selectedModel || !(data.supportedModels || []).includes(selectedModel)) {
-        const m = data.defaultChatModel || (data.supportedModels || [])[0] || '';
+      if (!selectedModel || !modelWeights.includes(selectedModel)) {
+        const m = data.defaultChatModel || modelWeights[0] || '';
         setSelectedModel(m);
         localStorage.setItem(MODEL_KEY, m);
       }
@@ -169,6 +174,7 @@ export function AppProvider({ children }) {
     selectedModel,
     selectedMode,
     supportedModels,
+    modelProfiles,
     supportedModes,
     loading,
     error,

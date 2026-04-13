@@ -19,10 +19,52 @@
 }
 
 .chat-bubble .bubble-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   font-size: 0.72rem;
   color: var(--text-tertiary);
   padding: 0 8px;
   font-weight: 500;
+}
+
+.chat-bubble .bubble-mode-tag,
+.chat-bubble .bubble-context-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1.25;
+}
+
+.chat-bubble .bubble-mode-tag.mode-estricto {
+  background: rgba(252, 211, 77, 0.15);
+  color: #fbbf24;
+}
+
+.chat-bubble .bubble-mode-tag.mode-hibrido {
+  background: rgba(110, 231, 183, 0.12);
+  color: #34d399;
+}
+
+.chat-bubble .bubble-mode-tag.mode-libre {
+  background: rgba(147, 197, 253, 0.14);
+  color: #93c5fd;
+}
+
+.chat-bubble .bubble-context-tag.yes {
+  background: var(--success-glow);
+  color: var(--success);
+}
+
+.chat-bubble .bubble-context-tag.no {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-tertiary);
 }
 
 .chat-bubble .bubble-body {

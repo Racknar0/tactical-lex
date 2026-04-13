@@ -13,20 +13,22 @@ import {
 import GlowButton from '../components/GlowButton';
 import { api } from '../api/client';
 import { useApp } from '../context/AppContext';
+import VisorCapturaFpj5 from './VisorCapturaFpj5';
 import VisorDocumentoLegal from './VisorDocumentoLegal';
+import VisorInformePolicia from './VisorInformePolicia';
 import VisorTutelaLegal from './VisorTutelaLegal';
 import './DocumentsModule.css';
 
+const CAPTURA_FPJ5 = 'Captura en Flagrancia (FPJ-5)';
+const INFORME_NOVEDAD_POLICIAL = 'Informe de Novedad Policial';
 const ACCION_TUTELA = 'Acción de Tutela';
 const DERECHO_PETICION = 'Derecho de Petición';
 
 const documentTypes = [
+  CAPTURA_FPJ5,
+  INFORME_NOVEDAD_POLICIAL,
   ACCION_TUTELA,
   DERECHO_PETICION,
-  'Tipo documento 2',
-  'Tipo documento 3',
-  'Tipo documento 4',
-  'Tipo documento 5',
 ];
 
 const AUTOFILL_PETICION_DATA = {
@@ -60,9 +62,29 @@ const AUTOFILL_TUTELA_DATA = {
     'Copia de la historia clínica.\n\nCopia de la fórmula médica donde me recetan la insulina.\n\nFotocopia de mi cédula ampliada.',
 };
 
+const AUTOFILL_INFORME_POLICIAL_DATA = {
+  grado: 'Patrullero',
+  nombres: 'Juan Camilo Duarte Méndez',
+  unidad: 'CAI Centro, Cuadrante 12',
+  fechaHora: '2026-04-13T02:00',
+  lugar: 'Calle 10 con Carrera 15, Duitama',
+  relato:
+    'Jefe, a las 2 am encontramos un man rompiendo la vitrina de la panadería, tocó esposarlo porque se puso agresivo y lo llevamos a la URI para dejarlo a disposición de la autoridad competente.',
+};
+
+const AUTOFILL_CAPTURA_FPJ5_DATA = {
+  capturadorGradoNombres: 'Patrullero Juan Camilo Duarte Méndez',
+  unidadCuadrante: 'CAI Centro, Cuadrante 12',
+  indiciado: 'Sujeto masculino sin identificar (alias El Flaco)',
+  presuntoDelito: 'Hurto',
+  lugarFechaHora: 'Carrera Décima con Calle 15, Duitama - 13 de abril de 2026, 02:00 horas',
+  relatoCaptura:
+    'Jefe, nosotros íbamos en la moto por la carrera décima y vimos que una señora empezó a gritar que la robaron. Vimos a un muchacho de chaqueta negra corriendo con un bolso rojo en la mano. Aceleramos la moto, lo cerramos en la esquina de la calle 15 y el tipo tiró el bolso al piso. Lo requisamos, no tenía armas, le leímos los derechos y recuperamos el bolso de la señora que tenía un celular y 50 mil pesos. La señora llegó ahí y dijo que sí, que ese era el que la había robado.',
+};
+
 export default function DocumentsModule() {
-  const { supportedModels, selectedModel } = useApp();
-  const [selectedType, setSelectedType] = useState(ACCION_TUTELA);
+  const { supportedModels, modelProfiles, selectedModel } = useApp();
+  const [selectedType, setSelectedType] = useState(CAPTURA_FPJ5);
   const [documentModel, setDocumentModel] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -95,11 +117,32 @@ export default function DocumentsModule() {
     relacionPruebas: '',
   });
 
-  const effectiveModel = documentModel || selectedModel || supportedModels[0] || '';
+  const [policeForm, setPoliceForm] = useState({
+    grado: 'Patrullero',
+    nombres: '',
+    unidad: '',
+    fechaHora: '',
+    lugar: '',
+    relato: '',
+  });
 
+  const [captureForm, setCaptureForm] = useState({
+    capturadorGradoNombres: '',
+    unidadCuadrante: '',
+    indiciado: '',
+    presuntoDelito: 'Hurto',
+    lugarFechaHora: '',
+    relatoCaptura: '',
+  });
+
+  const effectiveModel = documentModel || selectedModel || modelProfiles[0]?.weight || supportedModels[0] || '';
+  const effectiveModelProfile = modelProfiles.find((profile) => profile.weight === effectiveModel);
+
+  const isCaptureType = selectedType === CAPTURA_FPJ5;
+  const isPoliceType = selectedType === INFORME_NOVEDAD_POLICIAL;
   const isTutelaType = selectedType === ACCION_TUTELA;
   const isPetitionType = selectedType === DERECHO_PETICION;
-  const isSupportedType = isTutelaType || isPetitionType;
+  const isSupportedType = isCaptureType || isPoliceType || isTutelaType || isPetitionType;
 
   const handleTypeSelect = (type) => {
     setSelectedType(type);
@@ -110,12 +153,32 @@ export default function DocumentsModule() {
   };
 
   const handleAutofill = () => {
+    const fillCapture = selectedType === CAPTURA_FPJ5;
+    const fillPolice = selectedType === INFORME_NOVEDAD_POLICIAL;
     const fillTutela = selectedType === ACCION_TUTELA;
-    setSelectedType(fillTutela ? ACCION_TUTELA : DERECHO_PETICION);
+    setSelectedType(
+      fillCapture
+        ? CAPTURA_FPJ5
+        : fillPolice
+          ? INFORME_NOVEDAD_POLICIAL
+        : fillTutela
+          ? ACCION_TUTELA
+          : DERECHO_PETICION
+    );
     setSubmitError('');
     setGeneratedDocument(null);
     setGeneratedModel('');
     setGeneratedType('');
+
+    if (fillCapture) {
+      setCaptureForm({ ...AUTOFILL_CAPTURA_FPJ5_DATA });
+      return;
+    }
+
+    if (fillPolice) {
+      setPoliceForm({ ...AUTOFILL_INFORME_POLICIAL_DATA });
+      return;
+    }
 
     if (fillTutela) {
       setTutelaForm({ ...AUTOFILL_TUTELA_DATA });
@@ -141,14 +204,79 @@ export default function DocumentsModule() {
     }));
   };
 
+  const handlePoliceInputChange = (event) => {
+    const { name, value } = event.target;
+    setPoliceForm((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  const handleCaptureInputChange = (event) => {
+    const { name, value } = event.target;
+    setCaptureForm((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!isSupportedType) return;
+
+    if (effectiveModelProfile?.weight === 'pesado') {
+      const shouldContinue = window.confirm(
+        `Has seleccionado el perfil ${effectiveModelProfile.display_name || 'Alto analisis (mas costo)'}. Este perfil ofrece mayor capacidad de razonamiento, pero incrementa el consumo de tokens, el costo y el tiempo de generación. ¿Deseas continuar?`
+      );
+      if (!shouldContinue) return;
+    }
 
     setSubmitError('');
     setIsSubmitting(true);
 
     try {
+      if (isCaptureType) {
+        const response = await api('/generar-captura', {
+          method: 'POST',
+          timeoutMs: 180000,
+          body: JSON.stringify({
+            capturador: captureForm.capturadorGradoNombres,
+            unidad: captureForm.unidadCuadrante,
+            indiciado: captureForm.indiciado,
+            presunto_delito: captureForm.presuntoDelito,
+            lugar_fecha_hora: captureForm.lugarFechaHora,
+            relato: captureForm.relatoCaptura,
+            model: effectiveModel,
+          }),
+        });
+
+        setGeneratedDocument(response.data);
+        setGeneratedModel(response.modelHumanName || response.modelWeight || response.model || effectiveModel);
+        setGeneratedType(CAPTURA_FPJ5);
+        return;
+      }
+
+      if (isPoliceType) {
+        const response = await api('/generar-informe-policia', {
+          method: 'POST',
+          timeoutMs: 180000,
+          body: JSON.stringify({
+            grado: policeForm.grado,
+            nombres: policeForm.nombres,
+            unidad: policeForm.unidad,
+            fecha_hora: policeForm.fechaHora,
+            lugar: policeForm.lugar,
+            relato: policeForm.relato,
+            model: effectiveModel,
+          }),
+        });
+
+        setGeneratedDocument(response.data);
+        setGeneratedModel(response.modelHumanName || response.modelWeight || response.model || effectiveModel);
+        setGeneratedType(INFORME_NOVEDAD_POLICIAL);
+        return;
+      }
+
       if (isPetitionType) {
         const response = await api('/generar-peticion', {
           method: 'POST',
@@ -168,7 +296,7 @@ export default function DocumentsModule() {
         });
 
         setGeneratedDocument(response.data);
-        setGeneratedModel(response.model || effectiveModel);
+        setGeneratedModel(response.modelHumanName || response.modelWeight || response.model || effectiveModel);
         setGeneratedType(DERECHO_PETICION);
         return;
       }
@@ -192,7 +320,7 @@ export default function DocumentsModule() {
       });
 
       setGeneratedDocument(response.data);
-      setGeneratedModel(response.model || effectiveModel);
+      setGeneratedModel(response.modelHumanName || response.modelWeight || response.model || effectiveModel);
       setGeneratedType(ACCION_TUTELA);
     } catch (error) {
       setSubmitError(error.message || 'No fue posible generar el documento.');
@@ -233,11 +361,15 @@ export default function DocumentsModule() {
             <div>
               <h2>{selectedType || 'Selecciona un tipo de documento'}</h2>
               <p>
-                {isTutelaType
-                  ? 'Completa la información de la acción y genera la tutela con IA + RAG.'
+                {isCaptureType
+                  ? 'Convierte el relato operativo en texto técnico listo para Formato FPJ-5 de Fiscalía.'
+                  : isPoliceType
+                  ? 'Redacta el informe institucional en segundos a partir del relato del uniformado.'
+                  : isTutelaType
+                    ? 'Completa la información de la acción y genera la tutela con IA + RAG.'
                   : isPetitionType
                     ? 'Completa la información base y genera el borrador jurídico con IA + RAG.'
-                  : 'Completa la información base del titular del documento.'}
+                    : 'Completa la información base del titular del documento.'}
               </p>
             </div>
           </div>
@@ -245,7 +377,13 @@ export default function DocumentsModule() {
           <div className="docs-header-actions">
             <GlowButton type="button" size="small" variant="ghost" onClick={handleAutofill}>
               <Sparkles size={14} />
-              {isTutelaType ? ' Autofill tutela' : ' Autofill petición'}
+              {isCaptureType
+                ? ' Autofill captura'
+                : isPoliceType
+                  ? ' Autofill informe'
+                : isTutelaType
+                  ? ' Autofill tutela'
+                  : ' Autofill petición'}
             </GlowButton>
           </div>
         </div>
@@ -253,7 +391,8 @@ export default function DocumentsModule() {
         {selectedType && !isSupportedType ? (
           <div className="docs-empty-state">
             Este tipo de documento estará disponible en una siguiente iteración. Por ahora puedes generar
-            el flujo completo de <strong>{ACCION_TUTELA}</strong> y <strong>{DERECHO_PETICION}</strong>.
+            el flujo completo de <strong>{CAPTURA_FPJ5}</strong>, <strong>{INFORME_NOVEDAD_POLICIAL}</strong>,{' '}
+            <strong>{ACCION_TUTELA}</strong> y <strong>{DERECHO_PETICION}</strong>.
           </div>
         ) : null}
 
@@ -264,7 +403,7 @@ export default function DocumentsModule() {
                 <h4>0. Configuración de generación</h4>
 
                 <label className="docs-form-field">
-                  <span>Modelo de IA para redacción</span>
+                  <span>Perfil de IA para redacción</span>
                   <div className="docs-input-wrap">
                     <Sparkles size={16} />
                     <select
@@ -273,21 +412,250 @@ export default function DocumentsModule() {
                       onChange={(event) => setDocumentModel(event.target.value)}
                       required
                     >
-                      {supportedModels.length ? (
-                        supportedModels.map((model) => (
-                          <option key={model} value={model}>
-                            {model}
+                      {modelProfiles.length ? (
+                        modelProfiles.map((profile) => (
+                          <option
+                            key={profile.weight}
+                            value={profile.weight}
+                            title={profile.tooltips?.module_documents || ''}
+                          >
+                            {profile.display_name || profile.human_name}
                           </option>
                         ))
                       ) : (
-                        <option value="">Cargando modelos disponibles...</option>
+                        supportedModels.length ? (
+                          supportedModels.map((model) => (
+                            <option key={model} value={model}>
+                              {model}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="">Cargando modelos disponibles...</option>
+                        )
                       )}
                     </select>
                   </div>
+                  {effectiveModelProfile?.tooltips?.module_documents ? (
+                    <div className="docs-profile-tip" role="note">
+                      <strong>
+                        Perfil IA seleccionado: {effectiveModelProfile.display_name || effectiveModelProfile.human_name}
+                      </strong>
+                      <small className="docs-field-help">{effectiveModelProfile.tooltips.module_documents}</small>
+                    </div>
+                  ) : null}
                 </label>
               </div>
 
-              {isPetitionType ? (
+              {isCaptureType ? (
+                <>
+                  <div className="docs-form-section">
+                    <h4>1. Datos del Capturador (El Policía)</h4>
+
+                    <label className="docs-form-field">
+                      <span>Grado y Nombres</span>
+                      <div className="docs-input-wrap">
+                        <ShieldCheck size={16} />
+                        <input
+                          type="text"
+                          name="capturadorGradoNombres"
+                          value={captureForm.capturadorGradoNombres}
+                          onChange={handleCaptureInputChange}
+                          placeholder="Ej: Patrullero Juan Pérez"
+                          required
+                        />
+                      </div>
+                    </label>
+
+                    <label className="docs-form-field">
+                      <span>Cuadrante / Unidad</span>
+                      <div className="docs-input-wrap">
+                        <Building2 size={16} />
+                        <input
+                          type="text"
+                          name="unidadCuadrante"
+                          value={captureForm.unidadCuadrante}
+                          onChange={handleCaptureInputChange}
+                          placeholder="Ej: CAI Centro, Cuadrante 12"
+                          required
+                        />
+                      </div>
+                    </label>
+                  </div>
+
+                  <div className="docs-form-section">
+                    <h4>2. Datos del Indiciado (El Capturado)</h4>
+
+                    <label className="docs-form-field">
+                      <span>Nombres y Apellidos (o Alias)</span>
+                      <div className="docs-input-wrap">
+                        <UserSquare size={16} />
+                        <input
+                          type="text"
+                          name="indiciado"
+                          value={captureForm.indiciado}
+                          onChange={handleCaptureInputChange}
+                          placeholder="Ej: Carlos Díaz / Alias El Mono"
+                          required
+                        />
+                      </div>
+                    </label>
+
+                    <label className="docs-form-field">
+                      <span>Presunto Delito</span>
+                      <div className="docs-input-wrap">
+                        <Gavel size={16} />
+                        <select
+                          name="presuntoDelito"
+                          value={captureForm.presuntoDelito}
+                          onChange={handleCaptureInputChange}
+                          required
+                        >
+                          <option value="Hurto">Hurto</option>
+                          <option value="Tráfico de Estupefacientes">Tráfico de Estupefacientes</option>
+                          <option value="Lesiones Personales">Lesiones Personales</option>
+                          <option value="Daño en Bien Ajeno">Daño en Bien Ajeno</option>
+                        </select>
+                      </div>
+                    </label>
+                  </div>
+
+                  <div className="docs-form-section">
+                    <h4>3. Circunstancias de la Captura</h4>
+
+                    <label className="docs-form-field">
+                      <span>Lugar, Fecha y Hora</span>
+                      <div className="docs-input-wrap">
+                        <FileText size={16} />
+                        <input
+                          type="text"
+                          name="lugarFechaHora"
+                          value={captureForm.lugarFechaHora}
+                          onChange={handleCaptureInputChange}
+                          placeholder="Ej: Carrera Décima con Calle 15, Duitama - 13/04/2026 02:00"
+                          required
+                        />
+                      </div>
+                    </label>
+
+                    <label className="docs-form-field">
+                      <span>Relato de la Captura</span>
+                      <div className="docs-input-wrap docs-textarea-wrap">
+                        <ScrollText size={16} />
+                        <textarea
+                          name="relatoCaptura"
+                          value={captureForm.relatoCaptura}
+                          onChange={handleCaptureInputChange}
+                          placeholder="Narre cómo lo cogió. Ej: Íbamos patrullando y escuchamos un grito, el tipo iba corriendo con un celular..."
+                          rows={8}
+                          required
+                        />
+                      </div>
+                    </label>
+                  </div>
+                </>
+              ) : isPoliceType ? (
+                <>
+                  <div className="docs-form-section">
+                    <h4>1. Datos del Uniformado (Quién reporta)</h4>
+
+                    <label className="docs-form-field">
+                      <span>Grado</span>
+                      <div className="docs-input-wrap">
+                        <ShieldCheck size={16} />
+                        <select
+                          name="grado"
+                          value={policeForm.grado}
+                          onChange={handlePoliceInputChange}
+                          required
+                        >
+                          <option value="Patrullero">Patrullero</option>
+                          <option value="Subintendente">Subintendente</option>
+                          <option value="Intendente">Intendente</option>
+                          <option value="Teniente">Teniente</option>
+                        </select>
+                      </div>
+                    </label>
+
+                    <label className="docs-form-field">
+                      <span>Nombres y Apellidos</span>
+                      <div className="docs-input-wrap">
+                        <UserSquare size={16} />
+                        <input
+                          type="text"
+                          name="nombres"
+                          value={policeForm.nombres}
+                          onChange={handlePoliceInputChange}
+                          placeholder="Ej: Juan Carlos Pérez Gómez"
+                          required
+                        />
+                      </div>
+                    </label>
+
+                    <label className="docs-form-field">
+                      <span>Unidad / Cuadrante</span>
+                      <div className="docs-input-wrap">
+                        <Building2 size={16} />
+                        <input
+                          type="text"
+                          name="unidad"
+                          value={policeForm.unidad}
+                          onChange={handlePoliceInputChange}
+                          placeholder="Ej: CAI Centro, Cuadrante 12"
+                          required
+                        />
+                      </div>
+                    </label>
+                  </div>
+
+                  <div className="docs-form-section">
+                    <h4>2. Datos de la Novedad (El suceso)</h4>
+
+                    <label className="docs-form-field">
+                      <span>Fecha y Hora de los hechos</span>
+                      <div className="docs-input-wrap">
+                        <FileText size={16} />
+                        <input
+                          type="datetime-local"
+                          name="fechaHora"
+                          value={policeForm.fechaHora}
+                          onChange={handlePoliceInputChange}
+                          required
+                        />
+                      </div>
+                    </label>
+
+                    <label className="docs-form-field">
+                      <span>Lugar de los hechos</span>
+                      <div className="docs-input-wrap">
+                        <Building2 size={16} />
+                        <input
+                          type="text"
+                          name="lugar"
+                          value={policeForm.lugar}
+                          onChange={handlePoliceInputChange}
+                          placeholder="Ej: Calle 10 con Carrera 15"
+                          required
+                        />
+                      </div>
+                    </label>
+
+                    <label className="docs-form-field">
+                      <span>Relato de la Novedad</span>
+                      <div className="docs-input-wrap docs-textarea-wrap">
+                        <ScrollText size={16} />
+                        <textarea
+                          name="relato"
+                          value={policeForm.relato}
+                          onChange={handlePoliceInputChange}
+                          placeholder="Narre lo que pasó en sus propias palabras. Ej: Jefe, a las 2 am encontramos un man rompiendo la vitrina de la panadería, tocó esposarlo porque se puso agresivo y lo llevamos a la URI..."
+                          rows={7}
+                          required
+                        />
+                      </div>
+                    </label>
+                  </div>
+                </>
+              ) : isPetitionType ? (
                 <>
                   <div className="docs-form-section">
                     <h4>1. Datos del Solicitante (Quién pide)</h4>
@@ -609,9 +977,13 @@ export default function DocumentsModule() {
                   <FileText size={16} />
                   {isSubmitting
                     ? ' Generando documento...'
-                    : isTutelaType
-                      ? ' Generar tutela'
-                      : ' Generar documento'}
+                    : isCaptureType
+                      ? ' Generar captura'
+                      : isPoliceType
+                        ? ' Generar informe'
+                      : isTutelaType
+                        ? ' Generar tutela'
+                        : ' Generar documento'}
                 </GlowButton>
               </div>
 
@@ -620,7 +992,19 @@ export default function DocumentsModule() {
 
             {generatedDocument ? (
               <div className="docs-preview-pane">
-                {generatedType === ACCION_TUTELA ? (
+                {generatedType === CAPTURA_FPJ5 ? (
+                  <VisorCapturaFpj5
+                    form={captureForm}
+                    generatedData={generatedDocument}
+                    selectedModel={generatedModel}
+                  />
+                ) : generatedType === INFORME_NOVEDAD_POLICIAL ? (
+                  <VisorInformePolicia
+                    form={policeForm}
+                    generatedData={generatedDocument}
+                    selectedModel={generatedModel}
+                  />
+                ) : generatedType === ACCION_TUTELA ? (
                   <VisorTutelaLegal
                     form={tutelaForm}
                     generatedData={generatedDocument}

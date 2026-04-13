@@ -10,7 +10,7 @@ export default function ChatModule() {
   const {
     sessionId, chatTurns, setChatTurns, setSessionId,
     selectedModel, updateModel, selectedMode, updateMode,
-    supportedModels, supportedModes, ensureSession, refreshSessions,
+    supportedModels, modelProfiles, supportedModes, ensureSession, refreshSessions,
   } = useApp();
 
   const [question, setQuestion] = useState('');
@@ -27,6 +27,14 @@ export default function ChatModule() {
   const handleSend = async () => {
     const q = question.trim();
     if (!q || sending) return;
+
+    const selectedModelProfile = modelProfiles.find((profile) => profile.weight === selectedModel);
+    if (selectedModelProfile?.weight === 'pesado') {
+      const shouldContinue = window.confirm(
+        `Has seleccionado el perfil ${selectedModelProfile.display_name || 'Alto analisis (mas costo)'}. Este perfil ofrece mayor razonamiento, pero incrementa el consumo de tokens, el costo y la latencia de respuesta. ¿Deseas continuar?`
+      );
+      if (!shouldContinue) return;
+    }
 
     setSending(true);
     setQuestion('');
@@ -79,6 +87,8 @@ export default function ChatModule() {
           user: q,
           assistant: data.answer,
           grounded: data.grounded,
+          mode: data.mode || selectedMode,
+          useFileSearch: Boolean(data?.route?.useFileSearch),
           timestamp: new Date().toISOString(),
         };
         return updated;
@@ -99,6 +109,8 @@ export default function ChatModule() {
           user: q,
           assistant: `Error: ${err.message}`,
           grounded: false,
+          mode: selectedMode,
+          useFileSearch: false,
           timestamp: new Date().toISOString(),
         };
         return updated;
@@ -118,7 +130,7 @@ export default function ChatModule() {
       setSources([]);
       setTrace('En espera.');
       await ensureSession();
-    } catch (err) {
+    } catch {
       // silent
     }
   };
@@ -138,6 +150,7 @@ export default function ChatModule() {
 
   const selectedSource = sources.find((s) => String(s.index) === selectedSourceIdx);
   const activeMode = supportedModes.find((m) => m.id === selectedMode);
+  const selectedProfile = modelProfiles.find((profile) => profile.weight === selectedModel);
 
   return (
     <div className="chat-module">
@@ -152,9 +165,17 @@ export default function ChatModule() {
           </div>
           <div className="chat-controls">
             <select className="chat-select" value={selectedModel} onChange={(e) => updateModel(e.target.value)}>
-              {supportedModels.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
+              {modelProfiles.length ? (
+                modelProfiles.map((profile) => (
+                  <option key={profile.weight} value={profile.weight} title={profile.tooltips?.module_chat || ''}>
+                    {profile.display_name || profile.human_name}
+                  </option>
+                ))
+              ) : (
+                supportedModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))
+              )}
             </select>
             <select className="chat-select" value={selectedMode} onChange={(e) => updateMode(e.target.value)}>
               {supportedModes.map((m) => (
@@ -178,7 +199,14 @@ export default function ChatModule() {
               <div key={i} className="chat-turn-row">
                 <ChatBubble role="user" text={turn.user} timestamp={turn.timestamp} />
                 {turn.assistant && (
-                  <ChatBubble role="assistant" text={turn.assistant} grounded={turn.grounded} timestamp={turn.timestamp} />
+                  <ChatBubble
+                    role="assistant"
+                    text={turn.assistant}
+                    grounded={turn.grounded}
+                    responseMode={turn.mode}
+                    usedContext={turn.useFileSearch}
+                    timestamp={turn.timestamp}
+                  />
                 )}
                 {!turn.assistant && sending && i === chatTurns.length - 1 && (
                   <div className="chat-bubble assistant">
@@ -214,6 +242,13 @@ export default function ChatModule() {
 
       {/* ═══════ Side Panel ═══════ */}
       <div className="chat-side">
+        {selectedProfile?.tooltips?.module_chat ? (
+          <div className="mode-hint mode-hint-glow">
+            <strong>Perfil IA seleccionado: {selectedProfile.display_name || selectedProfile.human_name}</strong>
+            <span>{selectedProfile.tooltips.module_chat}</span>
+          </div>
+        ) : null}
+
         {activeMode && (
           <div className="mode-hint">
             <strong>{activeMode.nombre}:</strong> {activeMode.descripcion}
