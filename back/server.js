@@ -12,6 +12,13 @@ const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
+function parseTimeoutMs(rawValue, defaultValue) {
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return defaultValue;
+  if (parsed < 0) return defaultValue;
+  return Math.floor(parsed);
+}
+
 const PORT = Number(process.env.PORT ?? 3300);
 const SUPPORTED_CHAT_MODELS = [
   "gemini-3.1-pro-preview",
@@ -24,8 +31,14 @@ const CHAT_MEMORY_PATH = path.join(__dirname, "storage", "chat-memory.json");
 const UPLOADS_PATH = path.join(__dirname, "storage", "uploads");
 const MAX_TURNS_PER_SESSION = Number(process.env.CHAT_MAX_TURNS ?? 25);
 const MAX_CHAT_SESSIONS = Number(process.env.CHAT_MAX_SESSIONS ?? 5);
-const CHAT_QUERY_TIMEOUT_MS = Number(process.env.CHAT_QUERY_TIMEOUT_MS ?? 45000);
-const CASUAL_FAST_TIMEOUT_MS = Number(process.env.CASUAL_FAST_TIMEOUT_MS ?? 45000);
+const CHAT_QUERY_TIMEOUT_MS = parseTimeoutMs(
+  process.env.CHAT_QUERY_TIMEOUT_MS,
+  120000
+);
+const CASUAL_FAST_TIMEOUT_MS = parseTimeoutMs(
+  process.env.CASUAL_FAST_TIMEOUT_MS,
+  120000
+);
 const CASUAL_FAST_MODEL = "gemini-3.1-flash-lite-preview";
 const GOOGLE_API_LOGS_ENABLED =
   String(process.env.GOOGLE_API_LOGS ?? "true").toLowerCase() !== "false";
@@ -66,6 +79,10 @@ const FREE_CONTEXT_PREFERRED_INSTRUCTION =
   `${BASE_IDENTITY_INSTRUCTION} Prioriza responder con evidencia recuperada por File Search. Si no hay evidencia suficiente, puedes responder con conocimiento general, pero aclara explicitamente que la parte no viene del contexto cargado.`;
 const GENERAL_FAST_INSTRUCTION =
   `${BASE_IDENTITY_INSTRUCTION} Responde en espanol de forma breve y directa. Si la pregunta requiere documento y no hay contexto activo, indicalo claramente.`;
+const LEGAL_PETITION_SYSTEM_INSTRUCTION =
+  "Eres un abogado administrativo en Colombia. Tu tarea es tomar los hechos informales narrados por el usuario y redactarlos en un lenguaje juridico, formal y respetuoso. Debes consultar el documento adjunto en el File Search (Ley 1437) UNICAMENTE para extraer los articulos que fundamentan el Derecho de Peticion e incluirlos en la respuesta. No inventes leyes.";
+const LEGAL_TUTELA_SYSTEM_INSTRUCTION_TEMPLATE =
+  "Eres un experto Abogado Constitucionalista en Colombia. Tu tarea es redactar el cuerpo de una Acción de Tutela. Toma los hechos y pretensiones informales del usuario y redáctalos en un lenguaje jurídico, formal, cronológico y respetuoso dirigido a un Juez de la República. Debes consultar el documento adjunto (Decreto 2591) para extraer los fundamentos legales de la procedencia de la tutela. El derecho vulnerado principal es: [insertar derecho_vulnerado].";
 
 const initialState = {
   activeStoreName: null,
@@ -326,6 +343,23 @@ function enforceAssistantIdentity(answer) {
   return `${ASSISTANT_IDENTITY_MESSAGE}\n\n${answer}`;
 }
 
+function extractJsonObjectFromText(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) {
+    throw new Error("Gemini devolvio una respuesta vacia.");
+  }
+
+  const fencedMatch = raw.match(/```json\s*([\s\S]*?)\s*```/i);
+  const candidate = fencedMatch?.[1]?.trim() || raw;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+
+  const jsonSlice =
+    start >= 0 && end > start ? candidate.slice(start, end + 1) : candidate;
+
+  return JSON.parse(jsonSlice);
+}
+
 function summarizeContents(contents) {
   if (!Array.isArray(contents)) {
     return [];
@@ -486,6 +520,10 @@ async function generateContentWithFallback(ai, options) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function withTimeout(promise, timeoutMs, timeoutMessage) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return await promise;
+  }
+
   return await Promise.race([
     promise,
     new Promise((_, reject) => {
@@ -1015,6 +1053,297 @@ app.post("/api/documents/upload", async (req, res, next) => {
     if (tempFilePath) {
       await fs.unlink(tempFilePath).catch(() => undefined);
     }
+  }
+});
+
+app.post("/api/generar-peticion", async (req, res) => {
+  try {
+    const {
+      nombres,
+      cedula,
+      entidad,
+      objeto,
+      hechos,
+      model,
+      tipoDocumento,
+      direccionNotificacion,
+      correoElectronico,
+      relacionDocumentos,
+    } = req.body ?? {};
+
+    if (!nombres || !cedula || !entidad || !objeto || !hechos) {
+      return res.status(400).json({
+        ok: false,
+        message:
+          "Faltan campos obligatorios: nombres, cedula, entidad, objeto y hechos.",
+      });
+    }
+
+    const selectedModel =
+      typeof model === "string" && model.trim()
+        ? model.trim()
+        : DEFAULT_CHAT_MODEL;
+
+    if (!SUPPORTED_CHAT_MODELS.includes(selectedModel)) {
+      return res.status(400).json({
+        ok: false,
+        message: `Modelo no soportado: ${selectedModel}.`,
+      });
+    }
+
+    const state = await readState();
+    const storeId = String(state?.activeStoreName ?? "").trim();
+    if (!storeId) {
+      return res.status(400).json({
+        ok: false,
+        message:
+          "No hay Bóveda de Contexto activa. Selecciona una en Bóveda de Contexto y reintenta.",
+      });
+    }
+
+    const ai = getAIClient();
+
+    const prompt = [
+      "Redacta insumos para un Derecho de Peticion en Colombia con salida JSON estricto.",
+      "Debes devolver exactamente dos llaves: hechos_juridicos y fundamentos_de_derecho.",
+      "No agregues llaves extra, no devuelvas markdown.",
+      "",
+      "Datos del solicitante:",
+      `- Nombres y apellidos: ${String(nombres).trim()}`,
+      `- Tipo de documento: ${String(tipoDocumento || "Cédula de Ciudadanía").trim()}`,
+      `- Número de documento: ${String(cedula).trim()}`,
+      `- Dirección de notificación: ${String(direccionNotificacion || "No informada").trim()}`,
+      `- Correo electrónico: ${String(correoElectronico || "No informado").trim()}`,
+      "",
+      "Datos de la entidad:",
+      `- Entidad: ${String(entidad).trim()}`,
+      "",
+      "Petición del usuario:",
+      `- Objeto de la petición: ${String(objeto).trim()}`,
+      `- Hechos (informales): ${String(hechos).trim()}`,
+      `- Relación de documentos: ${String(relacionDocumentos || "Sin anexos reportados").trim()}`,
+      "",
+      "Formato obligatorio:",
+      '{"hechos_juridicos":"...","fundamentos_de_derecho":"..."}',
+    ].join("\n");
+
+    logGoogleApiCall("models.generateContent.legalPetition", {
+      model: selectedModel,
+      storeId,
+      entidad: clipText(String(entidad), 80),
+      objeto: clipText(String(objeto), 120),
+    });
+
+    const response = await withTimeout(
+      ai.models.generateContent({
+        model: selectedModel,
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: {
+          temperature: 0.2,
+          systemInstruction: LEGAL_PETITION_SYSTEM_INSTRUCTION,
+          responseMimeType: "application/json",
+          tools: [
+            {
+              fileSearch: {
+                fileSearchStoreNames: [storeId],
+                topK: 8,
+              },
+            },
+          ],
+        },
+      }),
+      CHAT_QUERY_TIMEOUT_MS,
+      `Gemini no respondio dentro de ${CHAT_QUERY_TIMEOUT_MS}ms para generar el documento.`
+    );
+
+    const parsed = extractJsonObjectFromText(response.text);
+    const result = {
+      hechos_juridicos: String(parsed?.hechos_juridicos ?? "").trim(),
+      fundamentos_de_derecho: String(parsed?.fundamentos_de_derecho ?? "").trim(),
+    };
+
+    if (!result.hechos_juridicos || !result.fundamentos_de_derecho) {
+      throw new Error(
+        "Gemini no devolvio el JSON esperado con hechos_juridicos y fundamentos_de_derecho."
+      );
+    }
+
+    return res.json({
+      ok: true,
+      model: selectedModel,
+      data: result,
+    });
+  } catch (error) {
+    console.error("[generar-peticion]", error);
+    return res.status(500).json({
+      ok: false,
+      message:
+        "No se pudo generar el Derecho de Petición con Gemini/File Search. Verifica la Bóveda activa y reintenta.",
+      detail: error?.message || "Fallo desconocido.",
+    });
+  }
+});
+
+app.post("/api/generar-tutela", async (req, res) => {
+  try {
+    const {
+      nombres,
+      cedula,
+      entidad_accionada,
+      derecho_vulnerado,
+      hechos,
+      pretension,
+      model,
+      tipoDocumento,
+      direccionNotificacion,
+      correoElectronico,
+      relacionPruebas,
+    } = req.body ?? {};
+
+    if (
+      !nombres ||
+      !cedula ||
+      !entidad_accionada ||
+      !derecho_vulnerado ||
+      !hechos ||
+      !pretension
+    ) {
+      return res.status(400).json({
+        ok: false,
+        message:
+          "Faltan campos obligatorios: nombres, cedula, entidad_accionada, derecho_vulnerado, hechos y pretension.",
+      });
+    }
+
+    const selectedModel =
+      typeof model === "string" && model.trim()
+        ? model.trim()
+        : DEFAULT_CHAT_MODEL;
+
+    if (!SUPPORTED_CHAT_MODELS.includes(selectedModel)) {
+      return res.status(400).json({
+        ok: false,
+        message: `Modelo no soportado: ${selectedModel}.`,
+      });
+    }
+
+    const state = await readState();
+    const storeId = String(state?.activeStoreName ?? "").trim();
+    if (!storeId) {
+      return res.status(400).json({
+        ok: false,
+        message:
+          "No hay Bóveda de Contexto activa. Selecciona una en Bóveda de Contexto y reintenta.",
+      });
+    }
+
+    const ai = getAIClient();
+    const tutelaSystemInstruction =
+      LEGAL_TUTELA_SYSTEM_INSTRUCTION_TEMPLATE.replace(
+        "[insertar derecho_vulnerado]",
+        String(derecho_vulnerado).trim()
+      );
+
+    const prompt = [
+      "Redacta insumos para una Acción de Tutela en Colombia con salida JSON estricto.",
+      "Debes devolver exactamente tres llaves: hechos_juridicos, pretensiones_juridicas y fundamentos_de_derecho.",
+      "No agregues llaves extra, no devuelvas markdown.",
+      "Los hechos juridicos deben estar enumerados (1., 2., 3...).",
+      "Las pretensiones juridicas deben convertirse en ordenes claras que puede impartir un juez.",
+      "Los fundamentos de derecho deben citar normas constitucionales y del Decreto 2591 aplicables al caso.",
+      "",
+      "Datos del accionante:",
+      `- Nombres y apellidos: ${String(nombres).trim()}`,
+      `- Tipo de documento: ${String(tipoDocumento || "Cédula de Ciudadanía").trim()}`,
+      `- Número de documento: ${String(cedula).trim()}`,
+      `- Dirección de notificación: ${String(direccionNotificacion || "No informada").trim()}`,
+      `- Correo electrónico: ${String(correoElectronico || "No informado").trim()}`,
+      "",
+      "Datos de la entidad accionada:",
+      `- Entidad accionada: ${String(entidad_accionada).trim()}`,
+      "",
+      "Base del caso:",
+      `- Derecho fundamental vulnerado: ${String(derecho_vulnerado).trim()}`,
+      `- Hechos (informales): ${String(hechos).trim()}`,
+      `- Pretensión del accionante (informal): ${String(pretension).trim()}`,
+      `- Relación de pruebas: ${String(relacionPruebas || "Sin anexos reportados").trim()}`,
+      "",
+      "Formato obligatorio:",
+      '{"hechos_juridicos":"...","pretensiones_juridicas":"...","fundamentos_de_derecho":"..."}',
+    ].join("\n");
+
+    logGoogleApiCall("models.generateContent.legalTutela", {
+      model: selectedModel,
+      storeId,
+      entidadAccionada: clipText(String(entidad_accionada), 80),
+      derechoVulnerado: clipText(String(derecho_vulnerado), 80),
+    });
+
+    const response = await withTimeout(
+      ai.models.generateContent({
+        model: selectedModel,
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: {
+          temperature: 0.2,
+          systemInstruction: tutelaSystemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              hechos_juridicos: { type: "STRING" },
+              pretensiones_juridicas: { type: "STRING" },
+              fundamentos_de_derecho: { type: "STRING" },
+            },
+            required: [
+              "hechos_juridicos",
+              "pretensiones_juridicas",
+              "fundamentos_de_derecho",
+            ],
+          },
+          tools: [
+            {
+              fileSearch: {
+                fileSearchStoreNames: [storeId],
+                topK: 8,
+              },
+            },
+          ],
+        },
+      }),
+      CHAT_QUERY_TIMEOUT_MS,
+      `Gemini no respondio dentro de ${CHAT_QUERY_TIMEOUT_MS}ms para generar la tutela.`
+    );
+
+    const parsed = extractJsonObjectFromText(response.text);
+    const result = {
+      hechos_juridicos: String(parsed?.hechos_juridicos ?? "").trim(),
+      pretensiones_juridicas: String(parsed?.pretensiones_juridicas ?? "").trim(),
+      fundamentos_de_derecho: String(parsed?.fundamentos_de_derecho ?? "").trim(),
+    };
+
+    if (
+      !result.hechos_juridicos ||
+      !result.pretensiones_juridicas ||
+      !result.fundamentos_de_derecho
+    ) {
+      throw new Error(
+        "Gemini no devolvio el JSON esperado con hechos_juridicos, pretensiones_juridicas y fundamentos_de_derecho."
+      );
+    }
+
+    return res.json({
+      ok: true,
+      model: selectedModel,
+      data: result,
+    });
+  } catch (error) {
+    console.error("[generar-tutela]", error);
+    return res.status(500).json({
+      ok: false,
+      message:
+        "No se pudo generar la Acción de Tutela con Gemini/File Search. Verifica la Bóveda activa y reintenta.",
+      detail: error?.message || "Fallo desconocido.",
+    });
   }
 });
 

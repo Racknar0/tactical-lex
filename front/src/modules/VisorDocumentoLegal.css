@@ -1,0 +1,128 @@
+.legal-viewer-shell {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.legal-viewer-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+  width: min(100%, 816px);
+  margin-inline: auto;
+}
+
+.legal-viewer-toolbar h3 {
+  font-size: 0.95rem;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.legal-viewer-toolbar p {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.legal-viewer-error {
+  color: #fca5a5;
+  font-size: 0.84rem;
+  margin-top: -2px;
+  width: min(100%, 816px);
+  margin-inline: auto;
+}
+
+.legal-document {
+  background: #ffffff;
+  color: #101118;
+  border-radius: 14px;
+  border: 1px solid #e5e7eb;
+  padding: 28px 32px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.15);
+  font-family: 'Times New Roman', Times, serif;
+  width: min(100%, 816px);
+  min-height: 1056px;
+  margin-inline: auto;
+  box-sizing: border-box;
+}
+
+.legal-document-header {
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.legal-document-header h2 {
+  margin: 10px 0 6px;
+  letter-spacing: 0.08em;
+  font-size: 1.1rem;
+}
+
+.legal-document-header p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.legal-document-block {
+  margin-top: 12px;
+}
+
+.legal-document-block h4 {
+  margin-bottom: 8px;
+  font-size: 0.95rem;
+}
+
+.legal-document-block p {
+  margin: 0 0 8px;
+  line-height: 1.55;
+  text-align: justify;
+}
+
+.legal-document-block ol {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.legal-document-block li {
+  line-height: 1.55;
+  margin-bottom: 8px;
+}
+
+.legal-document-footer {
+  margin-top: 26px;
+}
+
+.legal-signature-space {
+  margin-top: 24px;
+}
+
+.legal-document-meta {
+  margin-top: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: #374151;
+}
+
+.pdf-avoid-break {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+@media (max-width: 860px) {
+  .legal-viewer-toolbar {
+    flex-direction: column;
+  }
+
+  .legal-document {
+    padding: 18px;
+    min-height: auto;
+  }
+}
