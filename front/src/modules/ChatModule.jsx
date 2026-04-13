@@ -10,7 +10,7 @@ export default function ChatModule() {
   const {
     sessionId, chatTurns, setChatTurns, setSessionId,
     selectedModel, updateModel, selectedMode, updateMode,
-    supportedModels, supportedModes, ensureSession,
+    supportedModels, supportedModes, ensureSession, refreshSessions,
   } = useApp();
 
   const [question, setQuestion] = useState('');
@@ -37,11 +37,11 @@ export default function ChatModule() {
 
     // Thinking trace
     const steps = [
-      'Analizando intención del operador...',
-      'Compilando consulta de recuperación...',
-      'Escaneando store de contexto...',
-      'Ordenando pasajes de alta señal...',
-      'Sintetizando respuesta fundamentada...',
+      'Leyendo tu mensaje...',
+      'Buscando información relevante en tus documentos...',
+      'Revisando las mejores coincidencias...',
+      'Preparando una respuesta clara y precisa...',
+      'Verificando la calidad de la respuesta...',
     ];
     let traceText = '';
     const interval = setInterval(() => {
@@ -65,7 +65,7 @@ export default function ChatModule() {
 
       clearInterval(interval);
       const t = new Date().toLocaleTimeString();
-      setTrace((prev) => prev + `[${t}] Ciclo de recuperación completado.`);
+      setTrace((prev) => prev + `[${t}] ¡Respuesta lista!`);
 
       if (data.sessionId && data.sessionId !== sessionId) {
         setSessionId(data.sessionId);
@@ -88,6 +88,9 @@ export default function ChatModule() {
       if (data.sources?.length > 0) {
         setSelectedSourceIdx(String(data.sources[0].index));
       }
+
+      // Refresh sidebar sessions list
+      refreshSessions().catch(() => {});
     } catch (err) {
       clearInterval(interval);
       setChatTurns((prev) => {

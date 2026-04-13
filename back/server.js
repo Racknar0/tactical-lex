@@ -22,15 +22,21 @@ const DEFAULT_CHAT_MODEL = "gemini-3-flash-preview";
 const STATE_PATH = path.join(__dirname, "storage", "app-state.json");
 const CHAT_MEMORY_PATH = path.join(__dirname, "storage", "chat-memory.json");
 const UPLOADS_PATH = path.join(__dirname, "storage", "uploads");
-const MAX_TURNS_PER_SESSION = Number(process.env.CHAT_MAX_TURNS ?? 12);
-const MAX_CHAT_SESSIONS = Number(process.env.CHAT_MAX_SESSIONS ?? 200);
+const MAX_TURNS_PER_SESSION = Number(process.env.CHAT_MAX_TURNS ?? 25);
+const MAX_CHAT_SESSIONS = Number(process.env.CHAT_MAX_SESSIONS ?? 5);
 const CHAT_QUERY_TIMEOUT_MS = Number(process.env.CHAT_QUERY_TIMEOUT_MS ?? 45000);
+const CASUAL_FAST_TIMEOUT_MS = Number(process.env.CASUAL_FAST_TIMEOUT_MS ?? 45000);
+const CASUAL_FAST_MODEL = "gemini-3.1-flash-lite-preview";
 const GOOGLE_API_LOGS_ENABLED =
   String(process.env.GOOGLE_API_LOGS ?? "true").toLowerCase() !== "false";
+const ASSISTANT_IDENTITY_MESSAGE =
+  "Soy Tactical Lex IA, una IA entrenada para responder sobre temas legales.";
+const BASE_IDENTITY_INSTRUCTION =
+  "Siempre debes presentarte como Tactical Lex IA, una IA entrenada para responder sobre temas legales. Si el usuario pregunta quien eres, responde explicitamente con esa identidad.";
 const UPLOAD_MAX_TOKENS_PER_CHUNK = 500;
 const UPLOAD_MAX_OVERLAP_TOKENS = 200;
 const NO_EVIDENCE_MESSAGE =
-  "No tengo suficiente evidencia en el contexto seleccionado para responder esa pregunta.";
+  `${ASSISTANT_IDENTITY_MESSAGE} No tengo suficiente evidencia en el contexto seleccionado para responder esa pregunta.`;
 const SUPPORTED_CHAT_MODES = [
   {
     id: "estricto",
@@ -53,13 +59,13 @@ const SUPPORTED_CHAT_MODES = [
 ];
 const DEFAULT_CHAT_MODE = "hibrido";
 const STRICT_RAG_INSTRUCTION =
-  `Responde SOLO con evidencia recuperada por File Search. Si la evidencia no es suficiente, responde exactamente: ${NO_EVIDENCE_MESSAGE}`;
+  `${BASE_IDENTITY_INSTRUCTION} Responde SOLO con evidencia recuperada por File Search. Si la evidencia no es suficiente, responde exactamente: ${NO_EVIDENCE_MESSAGE}`;
 const HYBRID_SMALL_TALK_INSTRUCTION =
-  "Eres un asistente conversacional en espanol. Si el usuario saluda o hace charla casual, responde de forma breve y natural sin forzar busqueda documental.";
+  `${BASE_IDENTITY_INSTRUCTION} Eres un asistente conversacional en espanol. Si el usuario saluda o hace charla casual, responde de forma breve y natural sin forzar busqueda documental.`;
 const FREE_CONTEXT_PREFERRED_INSTRUCTION =
-  "Prioriza responder con evidencia recuperada por File Search. Si no hay evidencia suficiente, puedes responder con conocimiento general, pero aclara explicitamente que la parte no viene del contexto cargado.";
+  `${BASE_IDENTITY_INSTRUCTION} Prioriza responder con evidencia recuperada por File Search. Si no hay evidencia suficiente, puedes responder con conocimiento general, pero aclara explicitamente que la parte no viene del contexto cargado.`;
 const GENERAL_FAST_INSTRUCTION =
-  "Responde en espanol de forma breve y directa. Si la pregunta requiere documento y no hay contexto activo, indicalo claramente.";
+  `${BASE_IDENTITY_INSTRUCTION} Responde en espanol de forma breve y directa. Si la pregunta requiere documento y no hay contexto activo, indicalo claramente.`;
 
 const initialState = {
   activeStoreName: null,
@@ -235,6 +241,13 @@ function getSessionTurns(chatMemory, sessionId) {
   return session.turns;
 }
 
+function generateSessionTitle(question) {
+  const text = String(question ?? "").trim();
+  if (!text) return "Nueva conversación";
+  const words = text.split(/\s+/).slice(0, 6).join(" ");
+  return words.length > 40 ? words.slice(0, 40) + "..." : words;
+}
+
 function buildConversationContents(turns, question) {
   const contents = [];
 
@@ -299,6 +312,18 @@ function clipText(text, maxLength = 180) {
   }
 
   return `${text.slice(0, maxLength)}...`;
+}
+
+function enforceAssistantIdentity(answer) {
+  if (typeof answer !== "string" || !answer.trim()) {
+    return ASSISTANT_IDENTITY_MESSAGE;
+  }
+
+  if (/tactical\s*lex\s*ia/i.test(answer)) {
+    return answer;
+  }
+
+  return `${ASSISTANT_IDENTITY_MESSAGE}\n\n${answer}`;
 }
 
 function summarizeContents(contents) {
@@ -404,6 +429,7 @@ async function generateContentWithFallback(ai, options) {
     sessionId,
     mode,
     contextRequired,
+    timeoutMs = CHAT_QUERY_TIMEOUT_MS,
   } = options;
 
   const attempts = buildModelAttemptList(preferredModel, contextRequired);
@@ -425,8 +451,8 @@ async function generateContentWithFallback(ai, options) {
           contents,
           config,
         }),
-        CHAT_QUERY_TIMEOUT_MS,
-        `El modelo no respondio dentro de ${CHAT_QUERY_TIMEOUT_MS}ms. Prueba otro modelo o reintenta.`
+        timeoutMs,
+        `El modelo no respondio dentro de ${timeoutMs}ms. Prueba otro modelo o reintenta.`
       );
 
       return {
@@ -634,6 +660,80 @@ app.post("/api/chat/session", async (req, res, next) => {
       ok: true,
       sessionId,
       turns: chatMemory.sessions[sessionId].turns,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/chat/sessions", async (_req, res, next) => {
+  try {
+    const chatMemory = await readChatMemory();
+    const sessions = Object.values(chatMemory.sessions)
+      .map((s) => ({
+        sessionId: s.sessionId,
+        title: s.title || "Nueva conversación",
+        updatedAt: s.updatedAt,
+        turnsCount: Array.isArray(s.turns) ? s.turns.length : 0,
+      }))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+    res.json({ ok: true, sessions });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/chat/session/new", async (_req, res, next) => {
+  try {
+    const sessionId = randomUUID();
+    const chatMemory = await readChatMemory();
+
+    chatMemory.sessions[sessionId] = {
+      sessionId,
+      title: "Nueva conversación",
+      updatedAt: new Date().toISOString(),
+      turns: [],
+    };
+
+    await writeChatMemory(pruneChatMemory(chatMemory));
+
+    res.json({
+      ok: true,
+      sessionId,
+      title: "Nueva conversación",
+      turns: [],
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/chat/session/switch", async (req, res, next) => {
+  try {
+    const sessionId = normalizeSessionId(req.body?.sessionId);
+    if (!sessionId) {
+      return res.status(400).json({
+        ok: false,
+        message: "sessionId es obligatorio.",
+      });
+    }
+
+    const chatMemory = await readChatMemory();
+    const session = chatMemory.sessions[sessionId];
+
+    if (!session) {
+      return res.status(404).json({
+        ok: false,
+        message: "Sesión no encontrada.",
+      });
+    }
+
+    res.json({
+      ok: true,
+      sessionId: session.sessionId,
+      title: session.title || "Nueva conversación",
+      turns: session.turns || [],
     });
   } catch (error) {
     next(error);
@@ -957,6 +1057,14 @@ app.post("/api/rag/query", async (req, res, next) => {
       Boolean(state.activeStoreName) &&
       (contextRequired || (mode === "libre" && intent.needsContext));
 
+    // Fast-path: casual messages in hybrid/libre skip heavy models
+    const isCasualFastPath =
+      mode !== "estricto" && !intent.needsContext && intent.conversational;
+    const effectiveModel = isCasualFastPath ? CASUAL_FAST_MODEL : modelName;
+    const effectiveTimeout = isCasualFastPath
+      ? CASUAL_FAST_TIMEOUT_MS
+      : CHAT_QUERY_TIMEOUT_MS;
+
     if (contextRequired && !state.activeStoreName) {
       return res.status(400).json({
         ok: false,
@@ -965,13 +1073,14 @@ app.post("/api/rag/query", async (req, res, next) => {
     }
 
     logGoogleApiCall("models.generateContent", {
-      model: modelName,
+      model: effectiveModel,
       mode,
       sessionId,
       activeStoreName: state.activeStoreName,
       questionPreview: clipText(question, 200),
       previousTurns: previousTurns.length,
       intent,
+      isCasualFastPath,
       messagesSent: contents.length,
       contentsPreview: summarizeContents(contents),
       tool: {
@@ -996,6 +1105,12 @@ app.post("/api/rag/query", async (req, res, next) => {
               },
             ]
           : undefined,
+      };
+    } else if (isCasualFastPath) {
+      // Fast casual: no file search, conversational tone
+      config = {
+        temperature: 0.5,
+        systemInstruction: HYBRID_SMALL_TALK_INSTRUCTION,
       };
     } else if (mode === "hibrido") {
       config = {
@@ -1025,12 +1140,13 @@ app.post("/api/rag/query", async (req, res, next) => {
     }
 
     const modelResult = await generateContentWithFallback(ai, {
-      preferredModel: modelName,
+      preferredModel: effectiveModel,
       contents,
       config,
       sessionId,
       mode,
       contextRequired,
+      timeoutMs: effectiveTimeout,
     });
 
     const response = modelResult.response;
@@ -1045,6 +1161,8 @@ app.post("/api/rag/query", async (req, res, next) => {
       answer = `${answer}\n\nNota: no encontre evidencia suficiente en el contexto cargado; esta respuesta puede estar fuera del documento.`;
     }
 
+    answer = enforceAssistantIdentity(answer);
+
     const updatedTurns = [
       ...previousTurns,
       {
@@ -1055,8 +1173,16 @@ app.post("/api/rag/query", async (req, res, next) => {
       },
     ].slice(-MAX_TURNS_PER_SESSION);
 
+    // Auto-generate title from first message if session is new
+    const existingSession = chatMemory.sessions[sessionId];
+    const sessionTitle =
+      existingSession?.title && existingSession.title !== "Nueva conversación"
+        ? existingSession.title
+        : generateSessionTitle(question);
+
     chatMemory.sessions[sessionId] = {
       sessionId,
+      title: sessionTitle,
       updatedAt: new Date().toISOString(),
       turns: updatedTurns,
     };

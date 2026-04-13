@@ -14,6 +14,7 @@ export function AppProvider({ children }) {
   const [documents, setDocuments] = useState([]);
   const [sessionId, setSessionId] = useState(localStorage.getItem(SESSION_KEY) || null);
   const [chatTurns, setChatTurns] = useState([]);
+  const [chatSessions, setChatSessions] = useState([]);
   const [selectedModel, setSelectedModel] = useState(localStorage.getItem(MODEL_KEY) || '');
   const [selectedMode, setSelectedMode] = useState(localStorage.getItem(MODE_KEY) || '');
   const [supportedModels, setSupportedModels] = useState([]);
@@ -71,6 +72,17 @@ export function AppProvider({ children }) {
     }
   }, []);
 
+  const refreshSessions = useCallback(async () => {
+    try {
+      const data = await api('/chat/sessions', { method: 'GET' });
+      setChatSessions(data.sessions || []);
+      return data;
+    } catch (err) {
+      // silent — sessions list is non-critical
+      return { sessions: [] };
+    }
+  }, []);
+
   const ensureSession = useCallback(async () => {
     try {
       const persisted = localStorage.getItem(SESSION_KEY);
@@ -78,6 +90,36 @@ export function AppProvider({ children }) {
       const data = await api('/chat/session', {
         method: 'POST',
         body: JSON.stringify(payload),
+      });
+      setSessionId(data.sessionId);
+      setChatTurns(data.turns || []);
+      localStorage.setItem(SESSION_KEY, data.sessionId);
+      return data;
+    } catch (err) {
+      setError(err.message);
+      throw err;
+    }
+  }, []);
+
+  const createNewSession = useCallback(async () => {
+    try {
+      const data = await api('/chat/session/new', { method: 'POST' });
+      setSessionId(data.sessionId);
+      setChatTurns([]);
+      localStorage.setItem(SESSION_KEY, data.sessionId);
+      await refreshSessions();
+      return data;
+    } catch (err) {
+      setError(err.message);
+      throw err;
+    }
+  }, [refreshSessions]);
+
+  const activateSession = useCallback(async (targetSessionId) => {
+    try {
+      const data = await api('/chat/session/switch', {
+        method: 'POST',
+        body: JSON.stringify({ sessionId: targetSessionId }),
       });
       setSessionId(data.sessionId);
       setChatTurns(data.turns || []);
@@ -106,6 +148,7 @@ export function AppProvider({ children }) {
         await refreshState();
         await refreshStores();
         await ensureSession();
+        await refreshSessions();
       } catch {
         // errors already captured
       } finally {
@@ -122,6 +165,7 @@ export function AppProvider({ children }) {
     documents,
     sessionId,
     chatTurns,
+    chatSessions,
     selectedModel,
     selectedMode,
     supportedModels,
@@ -136,7 +180,10 @@ export function AppProvider({ children }) {
     refreshState,
     refreshStores,
     refreshDocuments,
+    refreshSessions,
     ensureSession,
+    createNewSession,
+    activateSession,
     updateModel,
     updateMode,
   };
