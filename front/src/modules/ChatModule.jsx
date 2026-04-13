@@ -17,12 +17,38 @@ export default function ChatModule() {
   const [sending, setSending] = useState(false);
   const [sources, setSources] = useState([]);
   const [selectedSourceIdx, setSelectedSourceIdx] = useState('');
-  const [trace, setTrace] = useState('En espera.');
+  const [traceItems, setTraceItems] = useState([]);
+  const [traceStatus, setTraceStatus] = useState('En espera.');
   const messagesEndRef = useRef(null);
+  const flowTickerRef = useRef(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatTurns]);
+
+  useEffect(() => () => {
+    if (flowTickerRef.current) {
+      clearInterval(flowTickerRef.current);
+      flowTickerRef.current = null;
+    }
+  }, []);
+
+  const stopFlowTicker = () => {
+    if (flowTickerRef.current) {
+      clearInterval(flowTickerRef.current);
+      flowTickerRef.current = null;
+    }
+  };
+
+  const appendTraceStep = (label) => {
+    const time = new Date().toLocaleTimeString();
+    setTraceItems((prev) => {
+      if (prev.some((item) => item.label === label)) {
+        return prev;
+      }
+      return [...prev, { time, label }];
+    });
+  };
 
   const handleSend = async () => {
     const q = question.trim();
@@ -36,28 +62,41 @@ export default function ChatModule() {
       if (!shouldContinue) return;
     }
 
+    stopFlowTicker();
+    setTraceItems([]);
+
+    const flowSteps = [
+      'Analizando tu mensaje inicial',
+      'Clasificando intencion y modo de respuesta',
+      selectedMode === 'libre'
+        ? 'Priorizando evidencia del contexto y respaldo general'
+        : 'Consultando evidencia del contexto seleccionado',
+      'Redactando respuesta juridica',
+      'Aplicando validacion de consistencia final',
+    ];
+
+    let flowIndex = 0;
+    appendTraceStep(flowSteps[flowIndex]);
+    setTraceStatus(flowSteps[flowIndex]);
+    flowTickerRef.current = setInterval(() => {
+      flowIndex += 1;
+      if (flowIndex < flowSteps.length) {
+        const nextStep = flowSteps[flowIndex];
+        appendTraceStep(nextStep);
+        setTraceStatus(nextStep);
+        return;
+      }
+
+      stopFlowTicker();
+      setTraceStatus('Esperando respuesta del modelo...');
+    }, 1300);
+
     setSending(true);
     setQuestion('');
 
     // Optimistic user message
     const userTurn = { user: q, assistant: '', grounded: false, timestamp: new Date().toISOString() };
     setChatTurns((prev) => [...prev, userTurn]);
-
-    // Thinking trace
-    const steps = [
-      'Leyendo tu mensaje...',
-      'Buscando información relevante en tus documentos...',
-      'Revisando las mejores coincidencias...',
-      'Preparando una respuesta clara y precisa...',
-      'Verificando la calidad de la respuesta...',
-    ];
-    let traceText = '';
-    const interval = setInterval(() => {
-      const step = steps[Math.floor(Math.random() * steps.length)];
-      const t = new Date().toLocaleTimeString();
-      traceText += `[${t}] ${step}\n`;
-      setTrace(traceText);
-    }, 900);
 
     try {
       const data = await api('/rag/query', {
@@ -71,9 +110,17 @@ export default function ChatModule() {
         }),
       });
 
-      clearInterval(interval);
-      const t = new Date().toLocaleTimeString();
-      setTrace((prev) => prev + `[${t}] ¡Respuesta lista!`);
+      stopFlowTicker();
+
+      if (data?.route?.lane) {
+        appendTraceStep(
+          data.route.lane === 'pesado'
+            ? 'Ruta usada: carril pesado con analisis documental'
+            : 'Ruta usada: carril rapido conversacional'
+        );
+      }
+      appendTraceStep('Respuesta lista');
+      setTraceStatus('Respuesta finalizada.');
 
       if (data.sessionId && data.sessionId !== sessionId) {
         setSessionId(data.sessionId);
@@ -102,7 +149,9 @@ export default function ChatModule() {
       // Refresh sidebar sessions list
       refreshSessions().catch(() => {});
     } catch (err) {
-      clearInterval(interval);
+      stopFlowTicker();
+      appendTraceStep('Se detecto un error en la consulta');
+      setTraceStatus('No fue posible completar el flujo.');
       setChatTurns((prev) => {
         const updated = [...prev];
         updated[updated.length - 1] = {
@@ -128,7 +177,8 @@ export default function ChatModule() {
       });
       setChatTurns([]);
       setSources([]);
-      setTrace('En espera.');
+      setTraceItems([]);
+      setTraceStatus('En espera.');
       await ensureSession();
     } catch {
       // silent
@@ -259,7 +309,28 @@ export default function ChatModule() {
           <div className="side-panel-title">
             <Activity size={16} /> Flujo de Pensamiento
           </div>
-          <div className="trace-box">{trace}</div>
+
+          <div className={`ai-thinking-visual ${sending ? 'active' : ''}`}>
+            <div className="ai-loader">
+              <span className="ai-loader-ring ring-a" />
+              <span className="ai-loader-ring ring-b" />
+              <span className="ai-loader-core" />
+            </div>
+          </div>
+
+          <div className="trace-status">{traceStatus}</div>
+          <div className="trace-list">
+            {traceItems.length > 0 ? (
+              traceItems.map((item, idx) => (
+                <div key={`${item.time}-${idx}`} className="trace-item">
+                  <span className="trace-time">[{item.time}]</span>
+                  <span className="trace-text">{item.label}</span>
+                </div>
+              ))
+            ) : (
+              <div className="trace-empty">Sin actividad reciente.</div>
+            )}
+          </div>
         </div>
 
         <div className="side-panel" style={{ flex: 1 }}>
