@@ -21,6 +21,7 @@ export default function ChatModule() {
   const [traceStatus, setTraceStatus] = useState('En espera.');
   const messagesEndRef = useRef(null);
   const flowTickerRef = useRef(null);
+  const traceCleanupTimersRef = useRef([]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -31,6 +32,9 @@ export default function ChatModule() {
       clearInterval(flowTickerRef.current);
       flowTickerRef.current = null;
     }
+
+    traceCleanupTimersRef.current.forEach((timer) => clearTimeout(timer));
+    traceCleanupTimersRef.current = [];
   }, []);
 
   const stopFlowTicker = () => {
@@ -40,14 +44,27 @@ export default function ChatModule() {
     }
   };
 
+  const clearTraceTimers = () => {
+    traceCleanupTimersRef.current.forEach((timer) => clearTimeout(timer));
+    traceCleanupTimersRef.current = [];
+  };
+
   const appendTraceStep = (label) => {
-    const time = new Date().toLocaleTimeString();
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
     setTraceItems((prev) => {
       if (prev.some((item) => item.label === label)) {
         return prev;
       }
-      return [...prev, { time, label }];
+      return [...prev, { id, label }];
     });
+
+    const cleanupTimer = setTimeout(() => {
+      setTraceItems((prev) => prev.filter((item) => item.id !== id));
+      traceCleanupTimersRef.current = traceCleanupTimersRef.current.filter((timer) => timer !== cleanupTimer);
+    }, 5200);
+
+    traceCleanupTimersRef.current.push(cleanupTimer);
   };
 
   const handleSend = async () => {
@@ -63,6 +80,7 @@ export default function ChatModule() {
     }
 
     stopFlowTicker();
+    clearTraceTimers();
     setTraceItems([]);
 
     const flowSteps = [
@@ -177,6 +195,7 @@ export default function ChatModule() {
       });
       setChatTurns([]);
       setSources([]);
+      clearTraceTimers();
       setTraceItems([]);
       setTraceStatus('En espera.');
       await ensureSession();
@@ -321,9 +340,9 @@ export default function ChatModule() {
           <div className="trace-status">{traceStatus}</div>
           <div className="trace-list">
             {traceItems.length > 0 ? (
-              traceItems.map((item, idx) => (
-                <div key={`${item.time}-${idx}`} className="trace-item">
-                  <span className="trace-time">[{item.time}]</span>
+              traceItems.map((item) => (
+                <div key={item.id} className="trace-line">
+                  <span className="trace-line-dot" />
                   <span className="trace-text">{item.label}</span>
                 </div>
               ))
